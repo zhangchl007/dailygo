@@ -120,6 +120,7 @@ androidx.tracing:tracing:1.0.0=debugAndroidTestCompileClasspath,debugAndroidTest
 androidx.tracing:tracing:1.1.0=androidTestImplementationDependenciesMetadata
 androidx.versionedparcelable:versionedparcelable:1.1.0=debugImplementationDependenciesMetadata
 androidx.versionedparcelable:versionedparcelable:1.1.1=debugAndroidTestCompileClasspath,debugAndroidTestRuntimeClasspath,debugCompileClasspath,debugRuntimeClasspath,debugUnitTestCompileClasspath,debugUnitTestRuntimeClasspath,implementationDependenciesMetadata,releaseCompileClasspath,releaseRuntimeClasspath,releaseUnitTestCompileClasspath,releaseUnitTestRuntimeClasspath
+com.android.tools.build:aapt2:8.10.1-12782657=verificationBuildTools
 com.android.tools.ddms:ddmlib:31.10.1=_internal-unified-test-platform-android-device-provider-ddmlib
 com.android.tools.emulator:proto:31.10.1=_internal-unified-test-platform-android-test-plugin-host-emulator-control
 com.android.tools.utp:android-device-provider-ddmlib-proto:31.10.1=_internal-unified-test-platform-android-device-provider-ddmlib

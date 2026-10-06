@@ -7,22 +7,10 @@ command -v xcrun >/dev/null || { printf 'Xcode command-line tools are missing.\n
 
 simulator=${IOS_SIMULATOR_UDID:-}
 if [[ -z "$simulator" ]]; then
-    simulator=$(xcrun simctl list devices available --json | swift -e '
-        import Foundation
-        let data = FileHandle.standardInput.readDataToEndOfFile()
-        let document = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        let devices = document["devices"] as! [String: [[String: Any]]]
-        let runtimes = devices.keys.filter { $0.contains("SimRuntime.iOS-") }.sorted().reversed()
-        let phones = runtimes.flatMap { devices[$0]! }.filter {
-            ($0["isAvailable"] as? Bool == true) && ($0["name"] as? String)?.hasPrefix("iPhone") == true
-        }
-        guard let selected = phones.first, let identifier = selected["udid"] as? String else {
-            FileHandle.standardError.write(Data("No available iPhone simulator.\n".utf8))
-            exit(1)
-        }
-        print(identifier)
-    ')
+    sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
+    simulator=$(xcrun simctl list devices available --json | swift "$root/scripts/select-ios-simulator.swift" "$sdk")
 fi
+printf 'Testing iOS Simulator UDID: %s\n' "$simulator"
 
 xcodebuild test \
     -project "$root/mobile/ios/DailyGo.xcodeproj" \

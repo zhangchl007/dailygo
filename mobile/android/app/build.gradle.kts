@@ -49,7 +49,13 @@ kotlin {
     sourceSets.getByName("main").kotlin.setSrcDirs(listOf("src/main/kotlin", "../storage/src/shared/kotlin"))
 }
 
+val verificationBuildTools by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+
 dependencies {
+    verificationBuildTools("com.android.tools.build:aapt2:8.10.1-12782657:linux")
     implementation(project(":domain"))
     implementation("androidx.room:room-runtime:2.7.2")
     implementation("androidx.sqlite:sqlite-bundled:2.5.2")
@@ -84,5 +90,6 @@ tasks.register("verifyDependencyArtifacts") {
     doLast {
         configurations.filter { it.isCanBeResolved && it.name.endsWith("RuntimeClasspath") }
             .forEach { it.resolve() }
+        verificationBuildTools.resolve()
     }
 }

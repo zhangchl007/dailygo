@@ -86,7 +86,10 @@ jobs:
           api-level: 35
           arch: x86_64
           disable-animations: true
-          script: bash scripts/gradle.sh -PandroidApp=true :app:connectedDebugAndroidTest --dependency-verification strict
+          script: |
+            bash scripts/gradle.sh -PandroidApp=true :app:connectedDebugAndroidTest --dependency-verification strict
+            mkdir -p .tools
+            adb exec-out run-as com.dailygo cat files/ci-native-launch.png > .tools/android-startup.png
       - name: Upload Android build and test evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -98,6 +101,7 @@ jobs:
             mobile/android/app/build/test-results/
             mobile/android/app/build/outputs/androidTest-results/
             mobile/android/build/reports/dependency-verification/
+            .tools/android-startup.png
           if-no-files-found: warn
           retention-days: 14
 

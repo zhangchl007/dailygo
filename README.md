@@ -139,7 +139,8 @@ CI selects Xcode 16.4. Run unsigned simulator app/unit/UI tests with:
 make native-ios-test
 ```
 
-The script discovers an available iPhone simulator. `IOS_SIMULATOR_UDID` can select
+The script selects an available iPhone simulator matching Xcode's simulator SDK.
+`IOS_SIMULATOR_UDID` can select
 a specific installed device. Real-device builds require your Apple team and
 provisioning; `com.dailygo` remains a provisional bundle/application identifier.
 
@@ -151,8 +152,12 @@ permission workflows remain P5; declarations alone do not grant health access.
 
 Successful Android/Xcode app builds, remaining P4 persistence/import, complete UI, actual health
 queries, reminders, accounts/sync, device profiling, accessibility/localization,
-beta, signing and store disclosures remain tracked tasks. Native app CI is configured
-but has not run on GitHub. Local domain tests, Gradle configuration/artifact resolution,
+beta, signing and store disclosures remain tracked tasks. The first native CI run
+for revision `af93b37` passed Kotlin/Room, Swift domain and legacy Rust tests but
+failed Android AAPT2 dependency verification and macOS project validation.
+Those blockers have local fixes; a new remote run must confirm them before T010
+can close. Launch tests now check empty-state visibility, recreation/relaunch and
+retain screenshots. Local domain tests, Gradle configuration/artifact resolution,
 Swift startup typechecking and Xcode project-structure checks pass; no local APK or
 iOS simulator build is claimed. SDK licenses were not accepted in this WSL environment.
 First SDK builds may expose further compile/tool verification issues. iOS app,
