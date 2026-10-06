@@ -42,8 +42,17 @@ final class LaunchTests: XCTestCase {
         app.buttons["Edit habit"].tap()
         let field = app.textFields["habit-title"]
         field.tap()
-        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: title.count))
+        field.press(forDuration: 1.2)
+        let selectAll = app.menuItems["Select All"]
+        if selectAll.waitForExistence(timeout: 2) {
+            selectAll.tap()
+        } else {
+            let selectAllButton = app.buttons["Select All"]
+            XCTAssertTrue(selectAllButton.waitForExistence(timeout: 2))
+            selectAllButton.tap()
+        }
         field.typeText(edited)
+        XCTAssertEqual(field.value as? String, edited)
         app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts[edited].waitForExistence(timeout: 10))
         app.buttons["Habit options"].tap()

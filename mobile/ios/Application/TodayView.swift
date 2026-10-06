@@ -134,7 +134,7 @@ struct TodayView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Text(habit.title).font(.headline)
-                                Spacer()
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                 Menu {
                                     Button { editing = habit } label: { Label("Edit habit", systemImage: "pencil") }
                                     Button {
@@ -143,8 +143,13 @@ struct TodayView: View {
                                         Task { _ = await model.perform { _ = try await $0.setHabitArchived(command) } }
                                     } label: { Label(habit.archived ? "Restore" : "Archive", systemImage: habit.archived ? "arrow.uturn.backward" : "archivebox") }
                                     Button(role: .destructive) { deleting = habit } label: { Label("Delete habit", systemImage: "trash") }
-                                } label: { Label("Habit options", systemImage: "ellipsis") }
+                                } label: {
+                                    Label("Habit options", systemImage: "ellipsis")
+                                        .frame(width: 44, height: 44)
+                                        .contentShape(Rectangle())
+                                }
                                 .labelStyle(.iconOnly)
+                                .buttonStyle(.borderless)
                                 .disabled(model.saving)
                             }
                             Text("\(scheduleName(habit.scheduleKind)) · \(goalName(habit.goalKind))").font(.subheadline).foregroundStyle(.secondary)
@@ -273,7 +278,7 @@ private struct NativeSettingsView: View {
         updating = true
         let center = UNUserNotificationCenter.current()
         let authorization: UNAuthorizationStatus = await withCheckedContinuation { continuation in
-            center.getNotificationSettings { settings in
+            center.getNotificationSettings { @Sendable settings in
                 continuation.resume(returning: settings.authorizationStatus)
             }
         }
