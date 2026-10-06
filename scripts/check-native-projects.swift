@@ -13,6 +13,15 @@ let targetIDs = projectObject["targets"] as! [String]
 let names = targetIDs.map { objects[$0]!["name"] as! String }
 precondition(Set(names) == Set(["DailyGo", "DailyGoTests", "DailyGoUITests"]))
 
+let configurationList = objects[projectObject["buildConfigurationList"] as! String]!
+let configurations = (configurationList["buildConfigurations"] as! [String]).map { objects[$0]! }
+let debug = configurations.first { $0["name"] as? String == "Debug" }!
+precondition((debug["buildSettings"] as! [String: Any])["ONLY_ACTIVE_ARCH"] as? String == "YES",
+             "Debug must use the selected simulator architecture to match Swift package builds")
+let release = configurations.first { $0["name"] as? String == "Release" }!
+precondition((release["buildSettings"] as! [String: Any])["ONLY_ACTIVE_ARCH"] as? String != "YES",
+             "Release must retain all supported architectures")
+
 for group in objects.values where group["isa"] as? String == "PBXGroup" {
     guard let path = group["path"] as? String else { continue }
     for child in group["children"] as! [String] {

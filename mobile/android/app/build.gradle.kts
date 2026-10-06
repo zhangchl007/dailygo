@@ -56,6 +56,7 @@ val verificationBuildTools by configurations.creating {
 
 dependencies {
     verificationBuildTools("com.android.tools.build:aapt2:8.10.1-12782657:linux")
+    verificationBuildTools("com.android.tools.lint:lint-gradle:31.10.1")
     implementation(project(":domain"))
     implementation("androidx.room:room-runtime:2.7.2")
     implementation("androidx.sqlite:sqlite-bundled:2.5.2")
@@ -86,7 +87,7 @@ ksp {
 
 tasks.register("verifyDependencyArtifacts") {
     group = "verification"
-    description = "Resolve app and test runtime artifacts for checksum verification without an Android SDK."
+    description = "Resolve app/test runtime and AAPT2/Lint tool artifacts for checksum verification without an Android SDK."
     doLast {
         configurations.filter { it.isCanBeResolved && it.name.endsWith("RuntimeClasspath") }
             .forEach { it.resolve() }
