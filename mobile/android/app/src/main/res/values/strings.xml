@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">DailyGo</string>
+    <string name="logo_content_description">深大附中 DailyGo 标志</string>
+    <string name="school_tagline">深大附中 · 向上每一天</string>
+    <string name="today">Today</string>
+    <string name="habits">Habits</string>
+    <string name="no_habits">No habits yet</string>
+</resources>

@@ -16,3 +16,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "DailyGo"
 include(":domain")
+include(":storage")
+if (providers.gradleProperty("androidApp").orNull == "true") {
+    include(":app")
+}

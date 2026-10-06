@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320" role="img" aria-labelledby="title desc">
+  <title id="title">DailyGo 深大附中标志</title>
+  <desc id="desc">深蓝色圆角方形中，一簇橙色火焰从展开的白色书页中向上升起。</desc>
+  <rect width="320" height="320" rx="72" fill="#0B3D70"/>
+  <path fill="#FF8A34" d="M160 48c-25 31-27 57-9 80l9 11 9-11c18-23 16-49-9-80Z"/>
+  <path fill="#FFF" d="M56 126c37-2 70 8 95 29v91c-28-20-59-29-95-25V126Zm208 0c-37-2-70 8-95 29v91c28-20 59-29 95-25V126Z"/>
+  <path fill="#FF8A34" d="M155 153h10v100h-10z"/>
+  <path fill="#FFF" d="M73 239c32-1 58 6 82 22h10c24-16 50-23 82-22-29 8-54 19-78 34h-18c-24-15-49-26-78-34Z" opacity=".88"/>
+</svg>

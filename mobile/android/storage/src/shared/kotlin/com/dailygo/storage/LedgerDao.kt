@@ -1,0 +1,37 @@
+package com.dailygo.storage
+
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.Query
+
+@Dao
+interface LedgerDao {
+    @Insert suspend fun insertHabit(habit: HabitRow)
+    @Insert suspend fun insertCheckIn(record: CheckInRow)
+    @Insert suspend fun insertOutbox(event: OutboxRow)
+    @Insert suspend fun insertReceipt(receipt: MutationReceiptRow)
+
+    @Query("SELECT * FROM habits WHERE ownerId = :ownerId AND id = :id")
+    suspend fun habit(ownerId: String, id: String): HabitRow?
+
+    @Query("SELECT * FROM habits WHERE ownerId = :ownerId ORDER BY createdAtMillis, id")
+    suspend fun habits(ownerId: String): List<HabitRow>
+
+    @Query("SELECT * FROM check_ins WHERE ownerId = :ownerId AND habitId = :habitId ORDER BY creditedDate, id")
+    suspend fun checkIns(ownerId: String, habitId: String): List<CheckInRow>
+
+    @Query("SELECT * FROM check_ins WHERE ownerId = :ownerId AND id = :id")
+    suspend fun checkIn(ownerId: String, id: String): CheckInRow?
+
+    @Query("SELECT * FROM check_ins WHERE ownerId = :ownerId AND habitId = :habitId AND creditedDate = :date")
+    suspend fun completionOn(ownerId: String, habitId: String, date: String): CheckInRow?
+
+    @Query("SELECT * FROM outbox WHERE ownerId = :ownerId ORDER BY createdAtMillis, eventId")
+    suspend fun outbox(ownerId: String): List<OutboxRow>
+
+    @Query("SELECT * FROM mutation_receipts WHERE ownerId = :ownerId AND operationId = :operationId")
+    suspend fun receipt(ownerId: String, operationId: String): MutationReceiptRow?
+
+    @Query("DELETE FROM outbox WHERE ownerId = :ownerId AND eventId = :eventId")
+    suspend fun acknowledge(ownerId: String, eventId: String)
+}

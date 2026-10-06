@@ -1,33 +1,159 @@
-name: Native Domain And Legacy Regression
+name: Native Applications And Domain
+
+permissions:
+  contents: read
 
 on:
   push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch:
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   kotlin-domain:
-    name: Kotlin Native Domain Acceptance
+    name: Kotlin Domain And Room Durability
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: actions/setup-java@v4.7.1
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
         with:
           distribution: temurin
           java-version: '17'
       - name: Native JVM acceptance tests
-        run: bash scripts/gradle.sh :domain:test --dependency-verification strict
+        run: bash scripts/gradle.sh :domain:test :storage:test --dependency-verification strict
+      - name: Upload JVM test and dependency evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: kotlin-domain-and-storage-tests
+          path: |
+            mobile/android/domain/build/test-results/
+            mobile/android/domain/build/reports/
+            mobile/android/storage/build/test-results/
+            mobile/android/storage/build/reports/
+            mobile/android/build/reports/dependency-verification/
+          if-no-files-found: warn
+          retention-days: 14
 
   swift-domain:
     name: Swift Native Domain Acceptance
     runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: Select pinned Xcode toolchain
-        run: sudo xcode-select --switch /Applications/Xcode_16.4.app/Contents/Developer
+      - name: Check pinned Xcode toolchain
+        run: xcodebuild -version
       - name: Shared calendar and streak acceptance
-        run: swift test --package-path mobile/ios/Packages/DailyGoDomain
+        run: |
+          set -o pipefail
+          mkdir -p .tools
+          swift test --package-path mobile/ios/Packages/DailyGoDomain 2>&1 | tee .tools/swift-domain-tests.log
+      - name: Upload Swift domain test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: swift-domain-tests
+          path: .tools/swift-domain-tests.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  android-app:
+    name: Android APK, Unit, Lint And Launch Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install pinned platform and build tools using runner SDK licenses
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;35.0.0" </dev/null'
+      - name: Build APKs, unit tests and lint
+        run: bash scripts/gradle.sh -PandroidApp=true :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug --dependency-verification strict
+      - name: Grant runner access to emulator acceleration
+        run: sudo -n chown "$USER" /dev/kvm
+      - uses: reactivecircus/android-emulator-runner@1dcd0090116d15e7c562f8db72807de5e036a4ed
+        with:
+          api-level: 35
+          arch: x86_64
+          disable-animations: true
+          script: bash scripts/gradle.sh -PandroidApp=true :app:connectedDebugAndroidTest --dependency-verification strict
+      - name: Upload Android build and test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-build-and-tests
+          path: |
+            mobile/android/app/build/outputs/apk/debug/*.apk
+            mobile/android/app/build/reports/
+            mobile/android/app/build/test-results/
+            mobile/android/app/build/outputs/androidTest-results/
+            mobile/android/build/reports/dependency-verification/
+          if-no-files-found: warn
+          retention-days: 14
+
+  ios-app:
+    name: iOS Simulator App, Unit And Launch Tests
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Validate native project graph
+        run: swift scripts/check-native-projects.swift
+      - name: Build and test native application on an available iPhone simulator
+        run: |
+          set -o pipefail
+          mkdir -p .tools
+          bash scripts/ios-test.sh 2>&1 | tee .tools/ios-build-tests.log
+      - name: Upload iOS test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ios-simulator-tests
+          path: |
+            .tools/ios-derived-data/Logs/Test/*.xcresult
+            .tools/ios-build-tests.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  native-validation:
+    name: Native Validation Gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: always()
+    needs: [kotlin-domain, swift-domain, android-app, ios-app]
+    steps:
+      - name: Summarize and require every native check
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          jobs = json.loads(os.environ['RESULTS'])
+          rows = ['## Native Validation', '', '| Job | Result |', '|---|---|']
+          rows.extend(f"| {name} | {job['result']} |" for name, job in sorted(jobs.items()))
+          rows.extend(['', 'Scope: native startup, current domain and Room behavior. '
+                       'Full product workflows, SwiftData, real health readings, '
+                       'signing and store acceptance are not certified by this run.'])
+          Path(os.environ['GITHUB_STEP_SUMMARY']).write_text('\n'.join(rows) + '\n')
+          failed = [name for name, job in jobs.items() if job['result'] != 'success']
+          if failed:
+              raise SystemExit('Native acceptance incomplete: ' + ', '.join(sorted(failed)))
+          PY
 
   rust-core-tests:
     name: Preserved Legacy Rust Regression
