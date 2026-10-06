@@ -234,11 +234,17 @@ final class NativeStorageTests: XCTestCase {
             let container = try ModelContainer(for: schema, migrationPlan: NativeMigrationPlan.self, configurations: [
                 ModelConfiguration("DailyGoNative", schema: schema, url: url, allowsSave: false, cloudKitDatabase: .none)])
             let repository = NativeRepository(modelContainer: container)
-            await expectFailure { _ = try await repository.recordProgress(self.command()) }
-            let entries = try await repository.entries(ownerID: "guest", habitID: "walk", kind: .progress)
-            let receipt = try await repository.receipt(ownerID: "guest", operationID: "progress")
-            XCTAssertTrue(entries.isEmpty)
-            XCTAssertNil(receipt)
+            for _ in 0..<2 {
+                await expectFailure { _ = try await repository.recordProgress(self.command()) }
+                let entries = try await repository.entries(ownerID: "guest", habitID: "walk", kind: .progress)
+                let receipt = try await repository.receipt(ownerID: "guest", operationID: "progress")
+                let habits = try await repository.habits(ownerID: "guest")
+                let events = try await repository.events(ownerID: "guest")
+                XCTAssertTrue(entries.isEmpty)
+                XCTAssertNil(receipt)
+                XCTAssertEqual(habits, [habit()])
+                XCTAssertEqual(events.map(\.eventID), ["create"])
+            }
         }
         let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
         _ = try await repository.recordProgress(command())

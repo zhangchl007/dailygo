@@ -4,6 +4,16 @@ import DailyGoDomain
 
 @ModelActor
 actor NativeRepository {
+    private var activeContext: ModelContext?
+
+    private var ledgerContext: ModelContext {
+        if let activeContext { return activeContext }
+        let context = ModelContext(modelContainer)
+        context.autosaveEnabled = false
+        activeContext = context
+        return context
+    }
+
     func importLegacy(url: URL, ownerID: String, zones: [String: String], acceptUnverified: Bool) throws -> NativeLegacyReport {
         let candidate: (NativeBackup?, [NativeLegacyIssue])
         do { candidate = try NativeLegacy.read(url: url, ownerID: ownerID, zones: zones, acceptUnverified: acceptUnverified) }
@@ -57,9 +67,9 @@ actor NativeRepository {
         try mutate {
             if try row(ownerID: ownerID, category: "deleted", keyID: ownerID) != nil { return }
             let descriptor = FetchDescriptor<NativeLedgerRow>(predicate: #Predicate { $0.ownerID == ownerID })
-            for record in try modelContext.fetch(descriptor) { modelContext.delete(record) }
+            for record in try ledgerContext.fetch(descriptor) { ledgerContext.delete(record) }
             let scopes = FetchDescriptor<NativeScopeRow>(predicate: #Predicate { $0.ownerID == ownerID })
-            for scope in try modelContext.fetch(scopes) { modelContext.delete(scope) }
+            for scope in try ledgerContext.fetch(scopes) { ledgerContext.delete(scope) }
             try append(ownerID: ownerID, category: "deleted", identifier: ownerID, keyID: ownerID, value: ["deleted": true])
         }
     }
@@ -128,7 +138,7 @@ actor NativeRepository {
     func acknowledge(ownerID: String, eventID: String) throws {
         try NativeStorageEncoding.validateIdentity(ownerID, eventID)
         try mutate {
-            if let event = try row(ownerID: ownerID, category: "event", keyID: eventID) { modelContext.delete(event) }
+            if let event = try row(ownerID: ownerID, category: "event", keyID: eventID) { ledgerContext.delete(event) }
         }
     }
 
@@ -189,13 +199,12 @@ actor NativeRepository {
     }
 
     private func mutate<Result>(_ body: () throws -> Result) throws -> Result {
-        modelContext.autosaveEnabled = false
         do {
             let result = try body()
-            try modelContext.save()
+            try ledgerContext.save()
             return result
         } catch {
-            modelContext.rollback()
+            activeContext = nil
             throw error
         }
     }
@@ -204,7 +213,7 @@ actor NativeRepository {
         let key = try NativeStorageEncoding.key(ownerID, category, keyID)
         var descriptor = FetchDescriptor<NativeLedgerRow>(predicate: #Predicate { $0.key == key })
         descriptor.fetchLimit = 1
-        return try modelContext.fetch(descriptor).first
+        return try ledgerContext.fetch(descriptor).first
     }
 
     private func entryRow(ownerID: String, category: String, identifier: String) throws -> NativeLedgerRow? {
@@ -219,7 +228,7 @@ actor NativeRepository {
         let key = try NativeStorageEncoding.key(ownerID, category, habitID)
         var descriptor = FetchDescriptor<NativeScopeRow>(predicate: #Predicate { $0.key == key })
         descriptor.fetchLimit = 1
-        guard let scope = try modelContext.fetch(descriptor).first else { return [] }
+        guard let scope = try ledgerContext.fetch(descriptor).first else { return [] }
         return habitID.isEmpty ? scope.records : scope.entries
     }
 
@@ -227,8 +236,8 @@ actor NativeRepository {
         guard try row(ownerID: ownerID, category: category, keyID: keyID) == nil else { throw NativeStorageError.duplicateEntity }
         let record = NativeLedgerRow(key: try NativeStorageEncoding.key(ownerID, category, keyID), ownerID: ownerID,
                         category: category, identifier: identifier, payload: try NativeStorageEncoding.encode(value))
-        modelContext.insert(record)
-        try NativeIndexes.attach(record, context: modelContext)
+        ledgerContext.insert(record)
+        try NativeIndexes.attach(record, context: ledgerContext)
     }
 
     private func appendEvent(_ event: NativeEvent) throws {
