@@ -10,7 +10,7 @@ import kotlinx.serialization.json.Json
 @Serializable
 data class BackupArchive(
     val format: String = "dailygo.android.backup",
-    val version: Int = 3,
+    val version: Int = 4,
     val ownerId: String,
     val habits: List<HabitRow>,
     val checkIns: List<CheckInRow>,
@@ -21,9 +21,9 @@ data class BackupArchive(
     val completionStates: List<CompletionStateRow> = emptyList(),
 ) {
     internal fun validate(expectedOwner: String, json: Json) {
-        require(format == "dailygo.android.backup" && version in 1..3) { "Unsupported backup" }
+        require(format == "dailygo.android.backup" && version in 1..4) { "Unsupported backup" }
         require(version != 1 || deletedHabits.isEmpty()) { "Unsupported deletion data" }
-        require(version == 3 || completionStates.isEmpty()) { "Unsupported correction data" }
+        require(version >= 3 || completionStates.isEmpty()) { "Unsupported correction data" }
         validateIdentity(expectedOwner)
         require(ownerId == expectedOwner) { "Backup owner mismatch" }
         fun identities(values: List<Pair<String, String>>) {
@@ -105,6 +105,15 @@ data class BackupArchive(
                     habit.copy(title = request.title, scheduleKind = request.scheduleKind,
                         scheduleParameter = request.scheduleParameter, zoneId = request.zoneId).definition()
                 }
+                "habit.goal_changed" -> {
+                    require(version >= 4) { "Unsupported goal change data" }
+                    val request = json.decodeFromString<HabitGoalCommand>(receipt.request)
+                    val habit = requireNotNull(definitions[request.habitId]) { "Missing habit" }
+                    validateIdentity(request.ownerId, request.operationId, request.habitId)
+                    require(request.ownerId == ownerId && request.operationId == receipt.operationId && request.habitId == receipt.resultId)
+                    require(request.asOfMillis == request.occurredAtMillis && request.occurredAtMillis >= habit.createdAtMillis)
+                    habit.copy(goalKind = request.goalKind, target = request.target).definition()
+                }
                 "habit.archived", "habit.restored" -> {
                     val request = json.decodeFromString<HabitArchiveCommand>(receipt.request)
                     val habit = requireNotNull(definitions[request.habitId]) { "Missing habit" }
@@ -129,6 +138,13 @@ data class BackupArchive(
                     require(request.workoutStartedAtMillis == null || request.workoutStartedAtMillis <= request.occurredAtMillis)
                     require(result.occurredAtMillis == request.occurredAtMillis)
                     validateIdentity(request.recordId, request.habitId)
+                    request.correctsRecordId?.let { recordId ->
+                        require(version >= 4 && request.workoutStartedAtMillis == null) { "Unsupported correction data" }
+                        validateIdentity(recordId)
+                        val original = requireNotNull(progress.singleOrNull { it.id == recordId }) { "Missing original progress" }
+                        require(result.id != original.id && original.habitId == result.habitId && result.occurredAtMillis >= original.occurredAtMillis)
+                        require(result.creditedDate == original.creditedDate && result.zoneId == original.zoneId && result.creditReason == original.creditReason)
+                    }
                 }
                 else -> throw IllegalArgumentException("Unsupported receipt kind")
             }
@@ -151,6 +167,11 @@ data class BackupArchive(
                 }
                 "habit.edited" -> {
                     val request = json.decodeFromString<HabitEditCommand>(receipt.request)
+                    require(event.createdAtMillis == request.occurredAtMillis) { "Invalid event timestamp" }
+                    json.encodeToString(request)
+                }
+                "habit.goal_changed" -> {
+                    val request = json.decodeFromString<HabitGoalCommand>(receipt.request)
                     require(event.createdAtMillis == request.occurredAtMillis) { "Invalid event timestamp" }
                     json.encodeToString(request)
                 }

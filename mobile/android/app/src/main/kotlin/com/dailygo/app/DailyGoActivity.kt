@@ -153,7 +153,7 @@ class DailyGoActivity : ComponentActivity() {
         }
     }
 
-    override fun onStart() { super.onStart(); model.reload() }
+    override fun onStart() { super.onStart(); DailyReminder.reconcile(this); model.reload() }
 }
 
 @Composable

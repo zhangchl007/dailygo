@@ -79,6 +79,19 @@ final class PolicyTests: XCTestCase {
         XCTAssertThrowsError(try archived.validateProgress(value: 400))
     }
 
+    func testHealthReadWindowsAreExplicitBoundedAndNeverFutureDated() throws {
+        let start = Date(timeIntervalSince1970: 1791280800)
+        let end = start.addingTimeInterval(3600)
+        let window = try HealthReadWindow(startedAt: start, endedAt: end, asOf: end)
+        XCTAssertEqual(window.startedAt, start)
+        XCTAssertEqual(window.endedAt, end)
+        for (from, through, asOf) in [(start, start, end), (end, start, end), (start, end, start),
+            (start, start.addingTimeInterval(32 * 86400), start.addingTimeInterval(32 * 86400))] {
+            XCTAssertThrowsError(try HealthReadWindow(startedAt: from, endedAt: through, asOf: asOf))
+        }
+        XCTAssertThrowsError(try HealthReadWindow(startedAt: Date(timeIntervalSince1970: .nan), endedAt: end, asOf: end))
+    }
+
     func testEvidenceIsSourceBackedAndMissingIsUnknown() throws {
         let goal = Goal.numeric(kind: .steps, target: 5000)
         let start = Date(timeIntervalSince1970: 1791280800)

@@ -192,6 +192,36 @@ actor NativeRepository {
         }
     }
 
+    func setHabitGoal(_ command: NativeHabitGoalCommand) throws -> NativeHabit {
+        try command.validate()
+        let request = try command.request()
+        return try mutate {
+            try requireActive(ownerID: command.ownerID)
+            if let previous = try receipt(ownerID: command.ownerID, operationID: command.operationID) {
+                guard previous.kind == "habit.goal_changed", previous.request == request else { throw NativeStorageError.operationConflict }
+                guard let result = try row(ownerID: command.ownerID, category: "habit", keyID: previous.resultID) else { throw NativeStorageError.missingResult }
+                return try decode(NativeHabit.self, result)
+            }
+            guard let record = try row(ownerID: command.ownerID, category: "habit", keyID: command.habitID) else { throw NativeStorageError.missingHabit }
+            for category in ["completion", "progress"] {
+                let ownerID = command.ownerID
+                let scopeKey = try NativeStorageEncoding.key(ownerID, category, command.habitID)
+                var descriptor = FetchDescriptor<NativeLedgerRow>(predicate: #Predicate {
+                    $0.ownerID == ownerID && $0.category == category && $0.habitScope?.key == scopeKey
+                })
+                descriptor.fetchLimit = 1
+                guard try ledgerContext.fetch(descriptor).isEmpty else { throw NativeStorageError.invalidDefinition }
+            }
+            let updated = try command.applying(to: decode(NativeHabit.self, record))
+            record.payload = try NativeStorageEncoding.encode(updated)
+            try appendEvent(NativeEvent(ownerID: command.ownerID, eventID: command.operationID, kind: "habit.goal_changed",
+                entityID: command.habitID, payload: request, createdAtMillis: command.occurredAtMillis))
+            try appendReceipt(NativeReceipt(ownerID: command.ownerID, operationID: command.operationID, kind: "habit.goal_changed",
+                request: request, resultID: command.habitID, resultKey: command.habitID))
+            return updated
+        }
+    }
+
     func setHabitArchived(_ command: NativeHabitArchiveCommand) throws -> NativeHabit {
         try command.validate()
         let kind = command.archived ? "habit.archived" : "habit.restored"
@@ -342,6 +372,19 @@ actor NativeRepository {
             } else {
                 guard try definition.isCompleted(value: command.value) else { throw DomainError.invalidGoal }
             }
+            var original: NativeEntry?
+            if let identifier = command.correctsRecordID {
+                try NativeStorageEncoding.validateIdentity(identifier)
+                guard kind == .progress, command.workoutStartedAtMillis == nil,
+                      let record = try row(ownerID: command.ownerID, category: "progress", keyID: identifier) else {
+                    throw NativeStorageError.invalidDefinition
+                }
+                let entry = try decode(NativeEntry.self, record)
+                guard entry.habitID == command.habitID, command.occurredAtMillis >= entry.occurredAtMillis else {
+                    throw NativeStorageError.invalidDefinition
+                }
+                original = entry
+            }
             let occurred = NativeStorageEncoding.date(command.occurredAtMillis)
             let today = try CalendarPolicy.credit(now: occurred, zoneID: habit.zoneID)
             let yesterday = try today.date.adding(days: -1).description
@@ -359,8 +402,8 @@ actor NativeRepository {
                     throw NativeStorageError.duplicateEntity
                 }
                 result = NativeEntry(ownerID: command.ownerID, id: command.recordID, habitID: command.habitID, kind: kind,
-                    occurredAtMillis: command.occurredAtMillis, creditedDate: credit.date.description, zoneID: credit.zoneID,
-                    creditReason: credit.reason, value: command.value)
+                    occurredAtMillis: command.occurredAtMillis, creditedDate: original?.creditedDate ?? credit.date.description,
+                    zoneID: original?.zoneID ?? credit.zoneID, creditReason: original?.creditReason ?? credit.reason, value: command.value)
                 try append(ownerID: command.ownerID, category: kind.rawValue, identifier: result.id, keyID: keyID, value: result)
                 try appendEvent(NativeEvent(ownerID: command.ownerID, eventID: command.operationID, kind: eventKind, entityID: result.id,
                     payload: try NativeStorageEncoding.encode(result), createdAtMillis: command.occurredAtMillis))

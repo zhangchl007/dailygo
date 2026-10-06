@@ -146,6 +146,40 @@ struct NativeHabitEditCommand: Codable, Equatable, Sendable {
     }
 }
 
+struct NativeHabitGoalCommand: Codable, Equatable, Sendable {
+    let ownerID: String
+    let operationID: String
+    let habitID: String
+    let goalKind: String
+    let target: Double?
+    let occurredAtMillis: Int64
+    var asOfMillis: Int64? = nil
+
+    func request() throws -> Data {
+        var normalized = self
+        normalized.asOfMillis = nil
+        return try NativeStorageEncoding.encode(normalized)
+    }
+
+    func validate() throws {
+        try NativeStorageEncoding.validateIdentity(ownerID, operationID, habitID)
+        guard occurredAtMillis <= (asOfMillis ?? occurredAtMillis) else { throw DomainError.futureDate }
+    }
+
+    func applying(to habit: NativeHabit) throws -> NativeHabit {
+        try validate()
+        guard ownerID == habit.ownerID, habitID == habit.id, occurredAtMillis >= habit.createdAtMillis else {
+            throw NativeStorageError.invalidDefinition
+        }
+        let updated = NativeHabit(ownerID: habit.ownerID, id: habit.id, title: habit.title,
+            scheduleKind: habit.scheduleKind, scheduleParameter: habit.scheduleParameter,
+            goalKind: goalKind, target: target, zoneID: habit.zoneID,
+            createdAtMillis: habit.createdAtMillis, archived: habit.archived)
+        _ = try updated.definition()
+        return updated
+    }
+}
+
 struct NativeHabitArchiveCommand: Codable, Equatable, Sendable {
     let ownerID: String
     let operationID: String
@@ -175,6 +209,7 @@ struct NativeEntryCommand: Codable, Sendable {
     let value: Double?
     let workoutStartedAtMillis: Int64?
     var asOfMillis: Int64?
+    var correctsRecordID: String? = nil
 
     func request() throws -> Data {
         var normalized = self

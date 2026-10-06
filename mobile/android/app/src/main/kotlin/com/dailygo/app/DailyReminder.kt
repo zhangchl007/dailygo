@@ -18,12 +18,13 @@ object DailyReminder {
     private const val requestCode = 47
 
     fun setEnabled(context: Context, enabled: Boolean) {
+        val allowed = enabled && canNotify(context)
         val preferences = context.getSharedPreferences("dailygo-settings", Context.MODE_PRIVATE)
-        preferences.edit().putBoolean("reminders-enabled", enabled).apply()
+        preferences.edit().putBoolean("reminders-enabled", allowed).apply()
         val intent = PendingIntent.getBroadcast(context, requestCode, Intent(context, DailyReminderReceiver::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val alarms = context.getSystemService(AlarmManager::class.java)
-        if (!enabled) {
+        if (!allowed) {
             alarms.cancel(intent)
             return
         }
@@ -42,7 +43,12 @@ object DailyReminder {
 
     fun canNotify(context: Context): Boolean =
         (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
-            context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
+            context.getSystemService(NotificationManager::class.java).areNotificationsEnabled() &&
+            context.getSystemService(NotificationManager::class.java).getNotificationChannel(channelId)?.importance != NotificationManager.IMPORTANCE_NONE
+
+    fun reconcile(context: Context) {
+        if (enabled(context) && !canNotify(context)) setEnabled(context, false)
+    }
 
     internal fun notify(context: Context) {
         if (!enabled(context)) return
@@ -73,6 +79,7 @@ class DailyReminderReceiver : BroadcastReceiver() {
 
 class ReminderBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED && DailyReminder.enabled(context)) DailyReminder.setEnabled(context, true)
+        if (intent.action in listOf(Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED) &&
+            DailyReminder.enabled(context)) DailyReminder.setEnabled(context, true)
     }
 }

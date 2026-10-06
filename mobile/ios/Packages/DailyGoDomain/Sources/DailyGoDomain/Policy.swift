@@ -97,6 +97,21 @@ public enum CalendarPolicy {
 public enum HealthSource: String, Codable, Sendable { case healthKit, healthConnect, manual }
 public enum EvidenceStatus: String, Codable, Sendable { case manual, unavailable, insufficient, healthBacked }
 
+public struct HealthReadWindow: Sendable {
+    public let startedAt: Date
+    public let endedAt: Date
+    public let asOf: Date
+
+    public init(startedAt: Date, endedAt: Date, asOf: Date) throws {
+        guard [startedAt, endedAt, asOf].allSatisfy({ $0.timeIntervalSince1970.isFinite }),
+              endedAt > startedAt, endedAt <= asOf,
+              endedAt.timeIntervalSince(startedAt) <= 31 * 86400 else { throw DomainError.invalidEvidence }
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.asOf = asOf
+    }
+}
+
 public struct HealthEvidence: Sendable {
     public let source: HealthSource
     public let startedAt: Date

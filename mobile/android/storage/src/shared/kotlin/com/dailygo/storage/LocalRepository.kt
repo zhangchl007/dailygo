@@ -216,6 +216,31 @@ class LocalRepository(private val database: LocalDatabase) {
         }
     }
 
+    suspend fun setHabitGoal(command: HabitGoalCommand): HabitRow {
+        validateIdentity(command.ownerId, command.operationId, command.habitId)
+        require(command.occurredAtMillis <= command.asOfMillis) { "Future habit change" }
+        val request = json.encodeToString(command.copy(asOfMillis = command.occurredAtMillis))
+        return database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                require(!ledger.isDeleted(command.ownerId)) { "Owner was deleted" }
+                val previous = ledger.receipt(command.ownerId, command.operationId)
+                if (previous != null) {
+                    require(previous.kind == "habit.goal_changed" && previous.request == request) { "Operation ID conflict" }
+                    return@immediateTransaction requireNotNull(ledger.habit(command.ownerId, previous.resultId))
+                }
+                val habit = requireNotNull(ledger.habit(command.ownerId, command.habitId)) { "Habit not found" }
+                require(command.occurredAtMillis >= habit.createdAtMillis) { "Change precedes habit creation" }
+                require(!ledger.hasHabitHistory(command.ownerId, command.habitId)) { "Goal changes require a habit without history" }
+                val updated = habit.copy(goalKind = command.goalKind, target = command.target)
+                updated.definition()
+                require(ledger.updateHabit(updated) == 1) { "Habit not found" }
+                ledger.insertOutbox(OutboxRow(command.ownerId, command.operationId, "habit.goal_changed", command.habitId, request, command.occurredAtMillis))
+                ledger.insertReceipt(MutationReceiptRow(command.ownerId, command.operationId, "habit.goal_changed", request, command.habitId))
+                updated
+            }
+        }
+    }
+
     suspend fun setHabitArchived(command: HabitArchiveCommand): HabitRow {
         validateIdentity(command.ownerId, command.operationId, command.habitId)
         require(command.occurredAtMillis <= command.asOfMillis) { "Future habit change" }
@@ -257,6 +282,13 @@ class LocalRepository(private val database: LocalDatabase) {
                 val definition = habit.definition()
                 require(!habit.archived && habit.goalKind != "completion") { "Progress requires an active numeric habit" }
                 require(!definition.goal.isCompleted(command.value)) { "Use completion for a reached goal" }
+                val original = command.correctsRecordId?.let { recordId ->
+                    validateIdentity(recordId)
+                    require(command.workoutStartedAtMillis == null) { "Correction preserves the original credit" }
+                    requireNotNull(ledger.progress(command.ownerId, recordId)) { "Progress not found" }.also {
+                        require(it.habitId == command.habitId && command.occurredAtMillis >= it.occurredAtMillis) { "Invalid correction reference or time" }
+                    }
+                }
                 val occurred = Instant.ofEpochMilli(command.occurredAtMillis)
                 val yesterday = occurred.atZone(ZoneId.of(habit.zoneId)).toLocalDate().minusDays(1).toString()
                 val credit = CalendarPolicy.credit(
@@ -265,7 +297,8 @@ class LocalRepository(private val database: LocalDatabase) {
                 )
                 val record = ProgressRow(
                     command.ownerId, command.recordId, command.habitId, command.occurredAtMillis,
-                    credit.date.toString(), credit.zoneId, credit.reason.name, command.value,
+                    original?.creditedDate ?: credit.date.toString(), original?.zoneId ?: credit.zoneId,
+                    original?.creditReason ?: credit.reason.name, command.value,
                 )
                 ledger.insertProgress(record)
                 ledger.insertOutbox(OutboxRow(

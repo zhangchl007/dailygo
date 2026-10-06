@@ -117,6 +117,39 @@ class LaunchTest {
     }
 
     @Test
+    fun healthReadDoesNotInventSamplesWithoutProviderPermission() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val end = java.time.Instant.ofEpochMilli(1_791_282_600_000)
+        val window = com.dailygo.domain.HealthReadWindow(end.minusSeconds(3600), end, end)
+        val reading = kotlinx.coroutines.runBlocking { NativeHealthService(context).readSteps(window) }
+        if (android.os.Build.VERSION.SDK_INT < 34) {
+            org.junit.Assert.assertEquals(NativeHealthReadStatus.UNAVAILABLE, reading.status)
+        }
+        if (reading.status == NativeHealthReadStatus.AVAILABLE) {
+            org.junit.Assert.assertNotNull(reading.evidence)
+            assertTrue(reading.sourceIdentifiers.isNotEmpty())
+            org.junit.Assert.assertEquals(window.startedAt, reading.evidence?.startedAt)
+            org.junit.Assert.assertEquals(window.endedAt, reading.evidence?.endedAt)
+        } else {
+            org.junit.Assert.assertNull(reading.evidence)
+            assertTrue(reading.sourceIdentifiers.isEmpty())
+        }
+    }
+
+    @Test
+    fun reminderPreferenceCannotClaimDeliveryWithoutPermission() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        try {
+            DailyReminder.setEnabled(context, true)
+            org.junit.Assert.assertEquals(DailyReminder.canNotify(context), DailyReminder.enabled(context))
+            compose.activityRule.scenario.recreate()
+            org.junit.Assert.assertEquals(DailyReminder.canNotify(context), DailyReminder.enabled(context))
+        } finally {
+            DailyReminder.setEnabled(context, false)
+        }
+    }
+
+    @Test
     fun remindersAreOptInAndSettingsAreReachable() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         compose.activityRule.scenario.onActivity { DailyReminder.setEnabled(it, false) }

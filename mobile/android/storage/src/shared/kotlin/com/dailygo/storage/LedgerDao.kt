@@ -91,6 +91,9 @@ interface LedgerDao {
     @Query("SELECT * FROM progress_entries WHERE ownerId = :ownerId AND id = :id")
     suspend fun progress(ownerId: String, id: String): ProgressRow?
 
+    @Query("SELECT EXISTS(SELECT 1 FROM check_ins WHERE ownerId = :ownerId AND habitId = :habitId UNION ALL SELECT 1 FROM progress_entries WHERE ownerId = :ownerId AND habitId = :habitId)")
+    suspend fun hasHabitHistory(ownerId: String, habitId: String): Boolean
+
     @Query("SELECT * FROM outbox WHERE ownerId = :ownerId ORDER BY createdAtMillis, eventId")
     suspend fun outbox(ownerId: String): List<OutboxRow>
 

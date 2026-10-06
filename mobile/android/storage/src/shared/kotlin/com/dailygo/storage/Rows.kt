@@ -4,6 +4,8 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 
 @Serializable
 @Entity(tableName = "habits", primaryKeys = ["ownerId", "id"], indices = [Index("ownerId", "archived", "createdAtMillis")])
@@ -116,6 +118,17 @@ data class HabitEditCommand(
 )
 
 @Serializable
+data class HabitGoalCommand(
+    val ownerId: String,
+    val operationId: String,
+    val habitId: String,
+    val goalKind: String,
+    val target: Double?,
+    val occurredAtMillis: Long,
+    val asOfMillis: Long = occurredAtMillis,
+)
+
+@Serializable
 data class HabitArchiveCommand(
     val ownerId: String,
     val operationId: String,
@@ -153,6 +166,7 @@ data class CompletionCorrectionCommand(
 )])
 data class CompletionStateRow(val ownerId: String, val recordId: String, val active: Boolean, val operationId: String, val occurredAtMillis: Long)
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class ProgressCommand(
     val ownerId: String,
@@ -163,4 +177,5 @@ data class ProgressCommand(
     val value: Double,
     val workoutStartedAtMillis: Long? = null,
     val asOfMillis: Long = occurredAtMillis,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val correctsRecordId: String? = null,
 )

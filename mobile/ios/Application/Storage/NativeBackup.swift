@@ -3,7 +3,7 @@ import DailyGoDomain
 
 struct NativeBackup: Codable, Sendable {
     var format = "dailygo.ios.backup"
-    var version = 3
+    var version = 4
     let ownerID: String
     let habits: [NativeHabit]
     let entries: [NativeEntry]
@@ -14,9 +14,9 @@ struct NativeBackup: Codable, Sendable {
 
     func validate(ownerID expectedOwner: String) throws {
         try NativeStorageEncoding.validateIdentity(expectedOwner)
-          guard format == "dailygo.ios.backup", (1...3).contains(version), ownerID == expectedOwner,
+          guard format == "dailygo.ios.backup", (1...4).contains(version), ownerID == expectedOwner,
               version != 1 || deletedHabits == nil,
-              version == 3 || completionStates == nil else { throw NativeStorageError.invalidDefinition }
+              version >= 3 || completionStates == nil else { throw NativeStorageError.invalidDefinition }
         func identities(_ records: [(String, String)]) throws {
             guard records.allSatisfy({ $0.0 == ownerID }), Set(records.map(\.1)).count == records.count else {
                 throw NativeStorageError.invalidDefinition
@@ -92,6 +92,13 @@ struct NativeBackup: Codable, Sendable {
                       let habit = definitions[request.habitID], request.asOfMillis == nil,
                       receipt.resultKey == nil || receipt.resultKey == request.habitID else { throw NativeStorageError.invalidDefinition }
                 _ = try request.applying(to: habit)
+            } else if receipt.kind == "habit.goal_changed" {
+                guard version >= 4 else { throw NativeStorageError.invalidDefinition }
+                let request = try NativeStorageEncoding.decode(NativeHabitGoalCommand.self, from: receipt.request)
+                guard request.ownerID == ownerID, request.operationID == receipt.operationID, request.habitID == receipt.resultID,
+                      let habit = definitions[request.habitID], request.asOfMillis == nil,
+                      receipt.resultKey == nil || receipt.resultKey == request.habitID else { throw NativeStorageError.invalidDefinition }
+                _ = try request.applying(to: habit)
             } else if receipt.kind == "habit.archived" || receipt.kind == "habit.restored" {
                 let request = try NativeStorageEncoding.decode(NativeHabitArchiveCommand.self, from: receipt.request)
                 try request.validate()
@@ -110,8 +117,17 @@ struct NativeBackup: Codable, Sendable {
                 }
                 if kind == .progress {
                     guard result.id == request.recordID, result.value == request.value, result.occurredAtMillis == request.occurredAtMillis else { throw NativeStorageError.invalidDefinition }
+                    if let identifier = request.correctsRecordID {
+                        try NativeStorageEncoding.validateIdentity(identifier)
+                        guard version >= 4, request.workoutStartedAtMillis == nil,
+                              let original = entries.first(where: { $0.kind == .progress && $0.id == identifier }),
+                              original.id != result.id, original.habitID == result.habitID,
+                              result.occurredAtMillis >= original.occurredAtMillis,
+                              result.creditedDate == original.creditedDate, result.zoneID == original.zoneID,
+                              result.creditReason == original.creditReason else { throw NativeStorageError.invalidDefinition }
+                    }
                 } else {
-                    guard let habit = definitions[request.habitID], try habit.definition().goal.isCompleted(value: request.value) else { throw NativeStorageError.invalidDefinition }
+                    guard request.correctsRecordID == nil, let habit = definitions[request.habitID], try habit.definition().goal.isCompleted(value: request.value) else { throw NativeStorageError.invalidDefinition }
                 }
                 let resultKey = kind == .completion ? try NativeStorageEncoding.key(result.habitID, result.creditedDate) : result.id
                 guard receipt.resultKey == nil || receipt.resultKey == resultKey else { throw NativeStorageError.invalidDefinition }
@@ -135,6 +151,10 @@ struct NativeBackup: Codable, Sendable {
             } else if event.kind == "habit.edited" {
                 let payload = try NativeStorageEncoding.decode(NativeHabitEditCommand.self, from: event.payload)
                 let request = try NativeStorageEncoding.decode(NativeHabitEditCommand.self, from: receipt.request)
+                guard payload == request, event.createdAtMillis == request.occurredAtMillis else { throw NativeStorageError.invalidDefinition }
+            } else if event.kind == "habit.goal_changed" {
+                let payload = try NativeStorageEncoding.decode(NativeHabitGoalCommand.self, from: event.payload)
+                let request = try NativeStorageEncoding.decode(NativeHabitGoalCommand.self, from: receipt.request)
                 guard payload == request, event.createdAtMillis == request.occurredAtMillis else { throw NativeStorageError.invalidDefinition }
             } else if event.kind == "habit.archived" || event.kind == "habit.restored" {
                 let payload = try NativeStorageEncoding.decode(NativeHabitArchiveCommand.self, from: event.payload)

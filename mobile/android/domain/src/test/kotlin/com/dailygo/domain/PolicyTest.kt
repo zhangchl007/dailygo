@@ -67,6 +67,19 @@ class PolicyTest {
     }
 
     @Test
+    fun healthReadWindowsAreExplicitBoundedAndNeverFutureDated() {
+        val start = Instant.parse("2026-10-06T10:00:00Z")
+        val end = start.plusSeconds(3600)
+        val window = HealthReadWindow(start, end, end)
+        assertEquals(start, window.startedAt)
+        assertEquals(end, window.endedAt)
+        for ((from, through, asOf) in listOf(Triple(start, start, end), Triple(end, start, end),
+            Triple(start, end, start), Triple(start, start.plusSeconds(32 * 86400), start.plusSeconds(32 * 86400)))) {
+            assertThrows(IllegalArgumentException::class.java) { HealthReadWindow(from, through, asOf) }
+        }
+    }
+
+    @Test
     fun evidenceIsSourceBackedAndMissingIsUnknown() {
         val goal = Goal.Numeric(MetricKind.STEPS, 5000.0)
         val start = Instant.parse("2026-10-06T10:00:00Z")

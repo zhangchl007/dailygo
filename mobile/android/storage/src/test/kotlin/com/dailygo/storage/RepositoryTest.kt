@@ -77,18 +77,27 @@ class RepositoryTest {
             val repository = LocalRepository(database)
             repository.saveHabit(habit(), "create")
             repository.saveHabit(habit("other"), "other-create")
-            for (offset in 0L..39L) {
+            for (offset in 0L..999L) {
                 val occurred = instant + offset * 86_400_000L
                 repository.complete(CompletionCommand("guest", "op-$offset", "record-$offset", "walk", occurred, null))
                 repository.complete(CompletionCommand("other", "other-$offset", "other-record-$offset", "walk", occurred, null))
             }
-            val start = java.time.Instant.ofEpochMilli(instant + 5 * 86_400_000L).atZone(java.time.ZoneId.of("Asia/Shanghai")).toLocalDate().toString()
-            val end = java.time.Instant.ofEpochMilli(instant + 39 * 86_400_000L).atZone(java.time.ZoneId.of("Asia/Shanghai")).toLocalDate().toString()
+            val start = java.time.Instant.ofEpochMilli(instant + 965 * 86_400_000L).atZone(java.time.ZoneId.of("Asia/Shanghai")).toLocalDate().toString()
+            val end = java.time.Instant.ofEpochMilli(instant + 999 * 86_400_000L).atZone(java.time.ZoneId.of("Asia/Shanghai")).toLocalDate().toString()
             val recent = repository.recentCheckIns("guest", "walk", start, end, 14)
             assertEquals(14, recent.size)
             assertEquals(recent.sortedByDescending { it.creditedDate }, recent)
-            assertEquals(40, repository.completionDates("guest", "walk").size)
+            val dates = repository.completionDates("guest", "walk")
+            assertEquals(1000, dates.size)
+            assertEquals(1000, com.dailygo.domain.StreakCalculator.calculate(com.dailygo.domain.Schedule.Daily,
+                dates, java.time.LocalDate.parse(end)).current)
             assertTrue(recent.all { it.ownerId == "guest" })
+            repository.correctCompletion(CompletionCorrectionCommand("guest", "undo-latest", "record-999", false,
+                instant + 999 * 86_400_000L + 1))
+            val corrected = repository.recentCheckIns("guest", "walk", start, end, 14)
+            assertEquals(14, corrected.size)
+            assertFalse(corrected.any { it.id == "record-999" })
+            assertEquals(1000, repository.completionDates("other", "walk").size)
         }
     }
 
@@ -232,6 +241,130 @@ class RepositoryTest {
             assertEquals(record, database.ledger().checkIns("guest", "walk").single())
             LocalRepository(database).deleteHabit(HabitDeleteCommand("guest", "delete", "walk", instant + 1))
             assertTrue(database.ledger().isHabitDeleted("guest", "walk"))
+        }
+    }
+
+    @Test fun `goal changes before history survive retry reopen and backup without reinterpreting entries`() = runBlocking<Unit> {
+        val path = directory.resolve("goal-editing.db").toString()
+        val change = HabitGoalCommand("guest", "goal", "walk", "steps", 1000.0, instant + 1)
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit(), "create")
+            repository.saveHabit(habit("other"), "create")
+            val updated = repository.setHabitGoal(change)
+            assertEquals("steps", updated.goalKind)
+            assertEquals(1000.0, updated.target)
+            assertEquals(habit("other"), database.ledger().habit("other", "walk"))
+            repository.recordProgress(ProgressCommand("guest", "partial", "partial", "walk", instant + 2, 400.0))
+            database.ledger().acknowledge("guest", "goal")
+            assertEquals(updated, repository.setHabitGoal(change.copy(asOfMillis = instant + 10)))
+            assertThrows(IllegalArgumentException::class.java) { runBlocking {
+                repository.setHabitGoal(change.copy(operationId = "new-goal", target = 2000.0,
+                    occurredAtMillis = instant + 3, asOfMillis = instant + 3))
+            } }
+            assertEquals(updated, database.ledger().habit("guest", "walk"))
+            assertNull(database.ledger().receipt("guest", "new-goal"))
+        }
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            assertEquals(1000.0, repository.setHabitGoal(change).target)
+            val backup = repository.exportOwner("guest")
+            openLocalDatabase(directory.resolve("goal-editing-restored.db").toString()).use { restored ->
+                val target = LocalRepository(restored)
+                target.importOwner("guest", backup)
+                assertEquals(1000.0, target.setHabitGoal(change).target)
+                assertEquals(400.0, restored.ledger().progress("guest", "partial")!!.value)
+                assertFalse(restored.ledger().outbox("guest").any { it.eventId == "goal" })
+            }
+        }
+    }
+
+    @Test fun `numeric corrections retain original values credit and acknowledged retries`() = runBlocking<Unit> {
+        val path = directory.resolve("numeric-correction.db").toString()
+        val correction = ProgressCommand("guest", "correction", "corrected", "walk", instant + 2, 200.0,
+            correctsRecordId = "original")
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit().copy(goalKind = "steps", target = 1000.0), "create")
+            val original = repository.recordProgress(ProgressCommand("guest", "partial", "original", "walk", instant, 400.0))
+            assertFalse(database.ledger().receipt("guest", "partial")!!.request.contains("correctsRecordId"))
+            repository.editHabit(HabitEditCommand("guest", "timezone", "walk", "Walk", "daily", null, "America/New_York", instant + 1))
+            val corrected = repository.recordProgress(correction)
+            assertEquals(original.creditedDate, corrected.creditedDate)
+            assertEquals(original.zoneId, corrected.zoneId)
+            assertEquals(original.creditReason, corrected.creditReason)
+            assertEquals(200.0, corrected.value)
+            assertEquals(original, database.ledger().progress("guest", "original"))
+            database.ledger().acknowledge("guest", "correction")
+            assertEquals(corrected, repository.recordProgress(correction.copy(asOfMillis = instant + 10)))
+            for (invalid in listOf(correction.copy(ownerId = "other"),
+                correction.copy(operationId = "missing", recordId = "missing", correctsRecordId = "missing"),
+                correction.copy(operationId = "early", recordId = "early", occurredAtMillis = instant - 1))) {
+                assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.recordProgress(invalid) } }
+            }
+        }
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            assertEquals(200.0, repository.recordProgress(correction).value)
+            val backup = repository.exportOwner("guest")
+            openLocalDatabase(directory.resolve("numeric-correction-restored.db").toString()).use { restored ->
+                val target = LocalRepository(restored)
+                target.importOwner("guest", backup)
+                assertEquals(200.0, target.recordProgress(correction).value)
+                assertEquals(400.0, restored.ledger().progress("guest", "original")!!.value)
+                assertFalse(restored.ledger().outbox("guest").any { it.eventId == "correction" })
+            }
+        }
+    }
+
+    @Test fun `goal changes validate atomically and cannot be hidden in older backups`() = runBlocking<Unit> {
+        openLocalDatabase(directory.resolve("goal-validation.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit(), "create")
+            val change = HabitGoalCommand("guest", "goal", "walk", "steps", 1000.0, instant + 1)
+            for (invalid in listOf(change.copy(ownerId = "other"), change.copy(goalKind = "unknown"),
+                change.copy(target = 1.5), change.copy(target = -1.0), change.copy(asOfMillis = instant),
+                change.copy(occurredAtMillis = instant - 1))) {
+                assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.setHabitGoal(invalid) } }
+            }
+            database.ledger().insertOutbox(OutboxRow("guest", "goal", "conflict", "walk", "{}", instant))
+            assertThrows(Exception::class.java) { runBlocking { repository.setHabitGoal(change) } }
+            assertEquals(habit(), database.ledger().habit("guest", "walk"))
+            assertNull(database.ledger().receipt("guest", "goal"))
+            database.ledger().acknowledge("guest", "goal")
+            repository.setHabitGoal(change)
+            val backup = Json.decodeFromString<BackupArchive>(repository.exportOwner("guest"))
+            assertEquals(4, backup.version)
+            openLocalDatabase(directory.resolve("goal-validation-target.db").toString()).use { restored ->
+                val target = LocalRepository(restored)
+                for (version in 1..3) {
+                    val downgraded = Json.encodeToString(BackupArchive.serializer(), backup.copy(version = version))
+                    assertThrows(IllegalArgumentException::class.java) { runBlocking { target.importOwner("guest", downgraded) } }
+                    assertTrue(restored.ledger().habits("guest").isEmpty())
+                }
+            }
+        }
+    }
+
+    @Test fun `numeric correction backups reject dangling references and version downgrade atomically`() = runBlocking<Unit> {
+        openLocalDatabase(directory.resolve("numeric-validation.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit().copy(goalKind = "steps", target = 1000.0), "create")
+            repository.recordProgress(ProgressCommand("guest", "partial", "original", "walk", instant, 400.0))
+            repository.recordProgress(ProgressCommand("guest", "correction", "corrected", "walk", instant + 1, 200.0,
+                correctsRecordId = "original"))
+            val backup = Json.decodeFromString<BackupArchive>(repository.exportOwner("guest"))
+            val invalid = listOf(backup.copy(version = 3), backup.copy(progress = backup.progress.filter { it.id != "original" }))
+            openLocalDatabase(directory.resolve("numeric-validation-target.db").toString()).use { restored ->
+                val target = LocalRepository(restored)
+                for (archive in invalid) {
+                    assertThrows(IllegalArgumentException::class.java) { runBlocking {
+                        target.importOwner("guest", Json.encodeToString(BackupArchive.serializer(), archive))
+                    } }
+                    assertTrue(restored.ledger().habits("guest").isEmpty())
+                    assertTrue(restored.ledger().outbox("guest").isEmpty())
+                }
+            }
         }
     }
 

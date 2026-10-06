@@ -67,6 +67,13 @@ object CalendarPolicy {
 enum class HealthSource { HEALTH_KIT, HEALTH_CONNECT, MANUAL }
 enum class EvidenceStatus { MANUAL, UNAVAILABLE, INSUFFICIENT, HEALTH_BACKED }
 
+data class HealthReadWindow(val startedAt: Instant, val endedAt: Instant, val asOf: Instant) {
+    init {
+        require(endedAt.isAfter(startedAt) && !endedAt.isAfter(asOf)) { "Invalid health query window" }
+        require(java.time.Duration.between(startedAt, endedAt) <= java.time.Duration.ofDays(31)) { "Health query window is too broad" }
+    }
+}
+
 data class HealthEvidence(
     val source: HealthSource,
     val startedAt: Instant,
