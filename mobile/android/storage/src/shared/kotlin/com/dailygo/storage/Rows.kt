@@ -87,6 +87,16 @@ data class MutationReceiptRow(
 data class DeletedOwnerRow(val ownerId: String)
 
 @Serializable
+data class HabitArchiveCommand(
+    val ownerId: String,
+    val operationId: String,
+    val habitId: String,
+    val archived: Boolean,
+    val occurredAtMillis: Long,
+    val asOfMillis: Long = occurredAtMillis,
+)
+
+@Serializable
 data class CompletionCommand(
     val ownerId: String,
     val operationId: String,

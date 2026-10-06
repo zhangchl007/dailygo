@@ -51,6 +51,26 @@ struct NativeHabit: Codable, Equatable, Sendable {
 
 enum NativeEntryKind: String, Codable, Sendable { case completion, progress }
 
+struct NativeHabitArchiveCommand: Codable, Equatable, Sendable {
+    let ownerID: String
+    let operationID: String
+    let habitID: String
+    let archived: Bool
+    let occurredAtMillis: Int64
+    var asOfMillis: Int64? = nil
+
+    func request() throws -> Data {
+        var normalized = self
+        normalized.asOfMillis = nil
+        return try NativeStorageEncoding.encode(normalized)
+    }
+
+    func validate() throws {
+        try NativeStorageEncoding.validateIdentity(ownerID, operationID, habitID)
+        guard occurredAtMillis <= (asOfMillis ?? occurredAtMillis) else { throw DomainError.futureDate }
+    }
+}
+
 struct NativeEntryCommand: Codable, Sendable {
     let ownerID: String
     let operationID: String

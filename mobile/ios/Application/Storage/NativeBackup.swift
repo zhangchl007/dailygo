@@ -47,6 +47,13 @@ struct NativeBackup: Codable, Sendable {
                 _ = try request.definition()
                 guard request.ownerID == ownerID, request.id == receipt.resultID, definitions[request.id] != nil else { throw NativeStorageError.invalidDefinition }
                 guard receipt.resultKey == nil || receipt.resultKey == request.id else { throw NativeStorageError.invalidDefinition }
+            } else if receipt.kind == "habit.archived" || receipt.kind == "habit.restored" {
+                let request = try NativeStorageEncoding.decode(NativeHabitArchiveCommand.self, from: receipt.request)
+                try request.validate()
+                guard request.ownerID == ownerID, request.operationID == receipt.operationID, request.habitID == receipt.resultID,
+                      let habit = definitions[request.habitID], request.occurredAtMillis >= habit.createdAtMillis,
+                      request.asOfMillis == nil, request.archived == (receipt.kind == "habit.archived"),
+                      receipt.resultKey == nil || receipt.resultKey == request.habitID else { throw NativeStorageError.invalidDefinition }
             } else {
                 guard receipt.kind == "progress.recorded" || receipt.kind == "checkin.completed" else { throw NativeStorageError.invalidDefinition }
                 let request = try NativeStorageEncoding.decode(NativeEntryCommand.self, from: receipt.request)
@@ -71,6 +78,10 @@ struct NativeBackup: Codable, Sendable {
                 let payload = try NativeStorageEncoding.decode(NativeHabit.self, from: event.payload)
                 let original = try NativeStorageEncoding.decode(NativeHabit.self, from: receipt.request)
                 guard original == payload else { throw NativeStorageError.invalidDefinition }
+            } else if event.kind == "habit.archived" || event.kind == "habit.restored" {
+                let payload = try NativeStorageEncoding.decode(NativeHabitArchiveCommand.self, from: event.payload)
+                let request = try NativeStorageEncoding.decode(NativeHabitArchiveCommand.self, from: receipt.request)
+                guard payload == request, event.createdAtMillis == request.occurredAtMillis else { throw NativeStorageError.invalidDefinition }
             } else {
                 let payload = try NativeStorageEncoding.decode(NativeEntry.self, from: event.payload)
                 let kind: NativeEntryKind = event.kind == "progress.recorded" ? .progress : .completion

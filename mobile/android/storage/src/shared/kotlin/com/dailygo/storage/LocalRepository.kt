@@ -115,6 +115,30 @@ class LocalRepository(private val database: LocalDatabase) {
         }
     }
 
+    suspend fun setHabitArchived(command: HabitArchiveCommand): HabitRow {
+        validateIdentity(command.ownerId, command.operationId, command.habitId)
+        require(command.occurredAtMillis <= command.asOfMillis) { "Future habit change" }
+        val kind = if (command.archived) "habit.archived" else "habit.restored"
+        val request = json.encodeToString(command.copy(asOfMillis = command.occurredAtMillis))
+        return database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                require(!ledger.isDeleted(command.ownerId)) { "Owner was deleted" }
+                val previous = ledger.receipt(command.ownerId, command.operationId)
+                if (previous != null) {
+                    require(previous.kind == kind && previous.request == request) { "Operation ID conflict" }
+                    return@immediateTransaction requireNotNull(ledger.habit(command.ownerId, previous.resultId))
+                }
+                val habit = requireNotNull(ledger.habit(command.ownerId, command.habitId)) { "Habit not found" }
+                require(command.occurredAtMillis >= habit.createdAtMillis) { "Change precedes habit creation" }
+                val updated = habit.copy(archived = command.archived)
+                require(ledger.updateHabit(updated) == 1) { "Habit not found" }
+                ledger.insertOutbox(OutboxRow(command.ownerId, command.operationId, kind, command.habitId, request, command.occurredAtMillis))
+                ledger.insertReceipt(MutationReceiptRow(command.ownerId, command.operationId, kind, request, command.habitId))
+                updated
+            }
+        }
+    }
+
     suspend fun recordProgress(command: ProgressCommand): ProgressRow {
         validateIdentity(command.ownerId, command.operationId, command.recordId, command.habitId)
         require(command.occurredAtMillis <= command.asOfMillis) { "Future progress" }

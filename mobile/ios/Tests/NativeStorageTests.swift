@@ -41,6 +41,85 @@ final class NativeStorageTests: XCTestCase {
         } catch {}
     }
 
+    func testArchivalPreservesHistoryAndRetryCannotUndoRestoration() async throws {
+        let url = try storeURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let archive = NativeHabitArchiveCommand(ownerID: "guest", operationID: "archive", habitID: "walk", archived: true, occurredAtMillis: instant + 1)
+        do {
+            let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+            _ = try await repository.saveHabit(habit(), operationID: "create")
+            _ = try await repository.saveHabit(habit(ownerID: "other"), operationID: "create")
+            _ = try await repository.recordProgress(command())
+            _ = try await repository.complete(command(operationID: "complete", recordID: "done", value: 1000))
+            let archived = try await repository.setHabitArchived(archive)
+            XCTAssertTrue(archived.archived)
+            let other = try await repository.habits(ownerID: "other")
+            XCTAssertFalse(other[0].archived)
+            await expectFailure { _ = try await repository.recordProgress(self.command(operationID: "blocked", recordID: "blocked")) }
+            _ = try await repository.exportOwner(ownerID: "guest")
+        }
+        let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+        let retried = try await repository.setHabitArchived(archive)
+        XCTAssertTrue(retried.archived)
+        try await repository.acknowledge(ownerID: "guest", eventID: "archive")
+        _ = try await repository.setHabitArchived(NativeHabitArchiveCommand(ownerID: "guest", operationID: "restore", habitID: "walk", archived: false, occurredAtMillis: instant + 2))
+        let restored = try await repository.setHabitArchived(archive)
+        XCTAssertFalse(restored.archived)
+        let events = try await repository.events(ownerID: "guest")
+        XCTAssertFalse(events.contains { $0.eventID == "archive" })
+        let target = try storeURL()
+        defer { try? FileManager.default.removeItem(at: target.deletingLastPathComponent()) }
+        let restoredRepository = NativeRepository(modelContainer: try NativeStore.open(url: target))
+        let backup = try await repository.exportOwner(ownerID: "guest")
+        try await restoredRepository.importOwner(ownerID: "guest", contents: backup)
+        let restoredRetry = try await restoredRepository.setHabitArchived(archive)
+        let history = try await restoredRepository.entries(ownerID: "guest", habitID: "walk", kind: .completion)
+        let progress = try await restoredRepository.entries(ownerID: "guest", habitID: "walk", kind: .progress)
+        XCTAssertFalse(restoredRetry.archived)
+        XCTAssertEqual(history.count, 1)
+        XCTAssertEqual(progress.count, 1)
+    }
+
+    func testArchivalFailuresPreserveStateAndRejectInvalidCommands() async throws {
+        let url = try storeURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let container = try NativeStore.open(url: url)
+        let repository = NativeRepository(modelContainer: container)
+        _ = try await repository.saveHabit(habit(), operationID: "create")
+        _ = try await repository.recordProgress(command())
+        let archive = NativeHabitArchiveCommand(ownerID: "guest", operationID: "archive", habitID: "walk", archived: true, occurredAtMillis: instant + 1)
+        do {
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            let conflict = NativeLedgerRow(key: try NativeStorageEncoding.key("guest", "event", "archive"), ownerID: "guest",
+                category: "event", identifier: "archive", payload: Data("{}".utf8))
+            context.insert(conflict)
+            try NativeIndexes.attach(conflict, context: context)
+            try context.save()
+        }
+        await expectFailure { _ = try await repository.setHabitArchived(archive) }
+        let unchanged = try await repository.habits(ownerID: "guest")
+        let receipt = try await repository.receipt(ownerID: "guest", operationID: "archive")
+        XCTAssertEqual(unchanged, [habit()])
+        XCTAssertNil(receipt)
+        try await repository.acknowledge(ownerID: "guest", eventID: "archive")
+        for invalid in [
+            NativeHabitArchiveCommand(ownerID: "missing-owner", operationID: "archive", habitID: "walk", archived: true, occurredAtMillis: instant + 1),
+            NativeHabitArchiveCommand(ownerID: "guest", operationID: "archive", habitID: "walk", archived: true, occurredAtMillis: instant + 2, asOfMillis: instant + 1),
+            NativeHabitArchiveCommand(ownerID: "guest", operationID: "archive", habitID: "walk", archived: true, occurredAtMillis: instant - 1),
+        ] {
+            await expectFailure { _ = try await repository.setHabitArchived(invalid) }
+        }
+        _ = try await repository.setHabitArchived(archive)
+        await expectFailure {
+            _ = try await repository.setHabitArchived(NativeHabitArchiveCommand(ownerID: "guest", operationID: "archive", habitID: "walk", archived: false, occurredAtMillis: self.instant + 1))
+        }
+        let progress = try await repository.entries(ownerID: "guest", habitID: "walk", kind: .progress)
+        XCTAssertEqual(progress.count, 1)
+        try await repository.deleteOwner(ownerID: "guest")
+        await expectFailure { _ = try await repository.setHabitArchived(archive) }
+    }
+
     func testProgressAndAcknowledgedRetrySurviveNewContainer() async throws {
         let url = try storeURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

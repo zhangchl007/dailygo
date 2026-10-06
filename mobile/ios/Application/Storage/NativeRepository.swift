@@ -109,6 +109,32 @@ actor NativeRepository {
         }
     }
 
+    func setHabitArchived(_ command: NativeHabitArchiveCommand) throws -> NativeHabit {
+        try command.validate()
+        let kind = command.archived ? "habit.archived" : "habit.restored"
+        let request = try command.request()
+        return try mutate {
+            try requireActive(ownerID: command.ownerID)
+            if let previous = try receipt(ownerID: command.ownerID, operationID: command.operationID) {
+                guard previous.kind == kind, previous.request == request else { throw NativeStorageError.operationConflict }
+                guard let result = try row(ownerID: command.ownerID, category: "habit", keyID: previous.resultID) else { throw NativeStorageError.missingResult }
+                return try decode(NativeHabit.self, result)
+            }
+            guard let record = try row(ownerID: command.ownerID, category: "habit", keyID: command.habitID) else { throw NativeStorageError.missingHabit }
+            let habit = try decode(NativeHabit.self, record)
+            guard command.occurredAtMillis >= habit.createdAtMillis else { throw NativeStorageError.invalidDefinition }
+            let updated = NativeHabit(ownerID: habit.ownerID, id: habit.id, title: habit.title,
+                scheduleKind: habit.scheduleKind, scheduleParameter: habit.scheduleParameter, goalKind: habit.goalKind,
+                target: habit.target, zoneID: habit.zoneID, createdAtMillis: habit.createdAtMillis, archived: command.archived)
+            record.payload = try NativeStorageEncoding.encode(updated)
+            try appendEvent(NativeEvent(ownerID: command.ownerID, eventID: command.operationID, kind: kind,
+                entityID: command.habitID, payload: request, createdAtMillis: command.occurredAtMillis))
+            try appendReceipt(NativeReceipt(ownerID: command.ownerID, operationID: command.operationID, kind: kind,
+                request: request, resultID: command.habitID, resultKey: command.habitID))
+            return updated
+        }
+    }
+
     func recordProgress(_ command: NativeEntryCommand) throws -> NativeEntry { try writeEntry(command, kind: .progress) }
     func complete(_ command: NativeEntryCommand) throws -> NativeEntry { try writeEntry(command, kind: .completion) }
 

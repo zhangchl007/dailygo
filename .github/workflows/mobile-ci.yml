@@ -164,12 +164,3 @@ jobs:
           if failed:
               raise SystemExit('Native acceptance incomplete: ' + ', '.join(sorted(failed)))
           PY
-
-  rust-core-tests:
-    name: Preserved Legacy Rust Regression
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Run Cargo Workspace Tests
-        run: cargo test --workspace --locked

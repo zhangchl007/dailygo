@@ -3,10 +3,12 @@ package com.dailygo.storage
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Update
 
 @Dao
 interface LedgerDao {
     @Insert suspend fun insertHabit(habit: HabitRow)
+    @Update suspend fun updateHabit(habit: HabitRow): Int
     @Insert suspend fun insertCheckIn(record: CheckInRow)
     @Insert suspend fun insertProgress(record: ProgressRow)
     @Insert suspend fun insertOutbox(event: OutboxRow)

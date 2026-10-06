@@ -57,6 +57,13 @@ data class BackupArchive(
                     request.definition()
                     require(request.ownerId == ownerId && request.id == receipt.resultId && request.id in definitions)
                 }
+                "habit.archived", "habit.restored" -> {
+                    val request = json.decodeFromString<HabitArchiveCommand>(receipt.request)
+                    val habit = requireNotNull(definitions[request.habitId]) { "Missing habit" }
+                    require(request.ownerId == ownerId && request.operationId == receipt.operationId && request.habitId == receipt.resultId)
+                    require(request.archived == (receipt.kind == "habit.archived"))
+                    require(request.asOfMillis == request.occurredAtMillis && request.occurredAtMillis >= habit.createdAtMillis)
+                }
                 "checkin.completed" -> {
                     val request = json.decodeFromString<CompletionCommand>(receipt.request)
                     val result = checkIns.singleOrNull { it.id == receipt.resultId }
@@ -83,6 +90,11 @@ data class BackupArchive(
             require(receipt.kind == event.kind && receipt.resultId == event.entityId)
             val payload = when (event.kind) {
                 "habit.created" -> json.encodeToString(json.decodeFromString<HabitRow>(receipt.request))
+                "habit.archived", "habit.restored" -> {
+                    val request = json.decodeFromString<HabitArchiveCommand>(receipt.request)
+                    require(event.createdAtMillis == request.occurredAtMillis) { "Invalid event timestamp" }
+                    json.encodeToString(request)
+                }
                 "checkin.completed" -> json.encodeToString(checkIns.single { it.id == event.entityId })
                 "progress.recorded" -> json.encodeToString(progress.single { it.id == event.entityId })
                 else -> throw IllegalArgumentException("Unsupported event kind")

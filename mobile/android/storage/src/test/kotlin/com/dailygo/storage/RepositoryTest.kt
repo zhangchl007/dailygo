@@ -36,6 +36,81 @@ class RepositoryTest {
         owner, "walk", "Walk", "daily", null, "completion", null, "Asia/Shanghai", instant, false,
     )
 
+    @Test fun `archival preserves history and retries cannot undo restoration`() = runBlocking<Unit> {
+        val path = directory.resolve("archival.db").toString()
+        val archive = HabitArchiveCommand("guest", "archive", "walk", true, instant + 1)
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit(), "create")
+            repository.saveHabit(habit("other"), "create")
+            repository.complete(CompletionCommand("guest", "complete", "done", "walk", instant, null))
+            assertTrue(repository.setHabitArchived(archive).archived)
+            assertFalse(database.ledger().habit("other", "walk")!!.archived)
+            assertEquals(1, database.ledger().checkIns("guest", "walk").size)
+            assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { repository.complete(CompletionCommand("guest", "blocked", "blocked", "walk", instant + 2, null)) }
+            }
+            repository.exportOwner("guest")
+        }
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            assertTrue(repository.setHabitArchived(archive).archived)
+            database.ledger().acknowledge("guest", "archive")
+            assertFalse(repository.setHabitArchived(archive.copy(operationId = "restore", archived = false, occurredAtMillis = instant + 2, asOfMillis = instant + 2)).archived)
+            assertFalse(repository.setHabitArchived(archive.copy(asOfMillis = instant + 10)).archived)
+            assertFalse(database.ledger().outbox("guest").any { it.eventId == "archive" })
+            val backup = repository.exportOwner("guest")
+            openLocalDatabase(directory.resolve("archival-restored.db").toString()).use { restored ->
+                val restoredRepository = LocalRepository(restored)
+                restoredRepository.importOwner("guest", backup)
+                assertFalse(restoredRepository.setHabitArchived(archive).archived)
+                assertEquals(1, restored.ledger().checkIns("guest", "walk").size)
+            }
+        }
+    }
+
+    @Test fun `archival failures are atomic and enforce ownership timestamps and deletion fences`() = runBlocking<Unit> {
+        openLocalDatabase(directory.resolve("archival-failure.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            val original = habit().copy(goalKind = "steps", target = 1000.0)
+            val archive = HabitArchiveCommand("guest", "archive", "walk", true, instant + 1)
+            repository.saveHabit(original, "create")
+            repository.recordProgress(ProgressCommand("guest", "progress", "partial", "walk", instant, 400.0))
+            database.ledger().insertOutbox(OutboxRow("guest", "archive", "conflict", "walk", "{}", instant))
+            assertThrows(Exception::class.java) { runBlocking { repository.setHabitArchived(archive) } }
+            assertEquals(original, database.ledger().habit("guest", "walk"))
+            assertNull(database.ledger().receipt("guest", "archive"))
+            database.ledger().acknowledge("guest", "archive")
+            for (invalid in listOf(
+                archive.copy(ownerId = "missing-owner"),
+                archive.copy(occurredAtMillis = instant + 2, asOfMillis = instant + 1),
+                archive.copy(occurredAtMillis = instant - 1, asOfMillis = instant - 1),
+            )) {
+                assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.setHabitArchived(invalid) } }
+            }
+            assertEquals(original, database.ledger().habit("guest", "walk"))
+            repository.setHabitArchived(archive)
+            assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { repository.setHabitArchived(archive.copy(archived = false)) }
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { repository.recordProgress(ProgressCommand("guest", "blocked", "blocked", "walk", instant + 2, 200.0)) }
+            }
+            assertEquals(400.0, database.ledger().progressEntries("guest", "walk").single().value)
+            val json = Json { encodeDefaults = true }
+            val backup = json.decodeFromString<BackupArchive>(repository.exportOwner("guest"))
+            val corrupted = backup.copy(events = backup.events.map { if (it.eventId == "archive") it.copy(createdAtMillis = instant + 2) else it })
+            openLocalDatabase(directory.resolve("archival-invalid.db").toString()).use { target ->
+                assertThrows(IllegalArgumentException::class.java) {
+                    runBlocking { LocalRepository(target).importOwner("guest", json.encodeToString(BackupArchive.serializer(), corrupted)) }
+                }
+                assertTrue(target.ledger().habits("guest").isEmpty())
+            }
+            repository.deleteOwner("guest")
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.setHabitArchived(archive) } }
+        }
+    }
+
     @Test fun `owner deletion survives reopen and fences old retries without affecting another owner`() = runBlocking<Unit> {
         val path = directory.resolve("delete-owner.db").toString()
         val original = habit().copy(goalKind = "steps", target = 1000.0)
