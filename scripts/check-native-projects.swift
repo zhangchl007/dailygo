@@ -22,12 +22,15 @@ let release = configurations.first { $0["name"] as? String == "Release" }!
 precondition((release["buildSettings"] as! [String: Any])["ONLY_ACTIVE_ARCH"] as? String != "YES",
              "Release must retain all supported architectures")
 
-for group in objects.values where group["isa"] as? String == "PBXGroup" {
-    guard let path = group["path"] as? String else { continue }
+func validateSources(_ groupID: String, directory: URL) throws {
+    let group = objects[groupID]!
+    let directory = (group["path"] as? String).map { directory.appendingPathComponent($0) } ?? directory
     for child in group["children"] as! [String] {
         let reference = objects[child]!
-        if let file = reference["path"] as? String {
-            let url = ios.appendingPathComponent(path).appendingPathComponent(file)
+        if reference["isa"] as? String == "PBXGroup" {
+            try validateSources(child, directory: directory)
+        } else if reference["sourceTree"] as? String == "<group>", let file = reference["path"] as? String {
+            let url = directory.appendingPathComponent(file)
             precondition(FileManager.default.fileExists(atPath: url.path), "Missing project source: \(url.path)")
             if url.pathExtension == "swift" {
                 let source = try String(contentsOf: url, encoding: .utf8)
@@ -36,6 +39,7 @@ for group in objects.values where group["isa"] as? String == "PBXGroup" {
         }
     }
 }
+try validateSources(projectObject["mainGroup"] as! String, directory: ios)
 
 let packages = objects.values.filter { $0["isa"] as? String == "XCLocalSwiftPackageReference" }
 precondition(packages.count == 1)

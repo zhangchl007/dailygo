@@ -48,6 +48,11 @@ public struct HabitDefinition: Sendable {
         guard !archived else { throw DomainError.archivedHabit }
         return try goal.isCompleted(value: value)
     }
+
+    public func validateProgress(value: Double) throws {
+        guard !archived else { throw DomainError.archivedHabit }
+        guard case .numeric = goal, try !goal.isCompleted(value: value) else { throw DomainError.invalidGoal }
+    }
 }
 
 public enum CreditReason: String, Codable, Sendable { case currentDay, midnightGrace }

@@ -105,12 +105,24 @@ preserves data, pending events and retry receipts. SQLite-full writes roll back
 and can retry after space is restored. Corruption/unsupported versions surface
 without destructive recreation; backup restoration is tested.
 
-The v1 Android builder/reopen test passed hosted CI. New progress, migration and
-recovery instrumentation tests await a new native CI run; local WSL has no SDK.
+Room v2 passed hosted CI at `0807ebd` (run 37433704470): APK/unit/lint and
+all seven Android instrumentation tests, including progress, migration and
+recovery. Local WSL has no licensed Android SDK.
 Startup UI remains unwired to persisted workflows, which belong to
 the later product integration. Local outbox kinds are not a finalized server API.
-SwiftData, legacy SQLite import, safe export/import/deletion and native device
-recovery evidence remain open P4 work. Legacy files/databases are untouched.
+
+An initial SwiftData source slice now lives in `mobile/ios/Application/Storage`:
+Sendable records, a local-only versioned schema and an actor-owned repository
+with atomic entity/event/receipt saves, rollback, acknowledged retries, immutable
+date credits and separate progress. Five file-backed XCTest methods are wired
+into the Xcode test target. Production callers must share one writer actor;
+cross-repository/process concurrency is not accepted by these tests.
+
+On Linux, record types are typechecked against the domain module; native storage
+sources/tests are syntax-checked only. Their Apple-framework compile and execution
+still require fresh macOS CI. SwiftData upgrade, indexed-query and disk-full/restore
+evidence, legacy SQLite import and safe export/import/deletion remain open P4 work.
+Legacy files/databases are untouched.
 
 ## Native App Builds
 
@@ -157,16 +169,16 @@ permission workflows remain P5; declarations alone do not grant health access.
 
 Remaining P4 persistence/import, complete UI, actual health
 queries, reminders, accounts/sync, device profiling, accessibility/localization,
-beta, signing and store disclosures remain tracked tasks. P3 native CI passed for
-`b5093b804372d847179e2d45d60e6ffc52b639b6`:
-https://github.com/zhangchl007/dailygo/actions/runs/37429669178
+beta, signing and store disclosures remain tracked tasks. Latest accepted native CI:
+`0807ebdf323bdc8b3814081dac6c897e1f75360d`:
+https://github.com/zhangchl007/dailygo/actions/runs/37433704470
 Domain/Room tests, Android APK/unit/lint/emulator and Xcode simulator app/unit/UI
 all passed. Retained artifacts include APKs/reports, Android startup PNG, Swift
 domain results and iOS xcresult/logs. Launch tests check honest empty states and
-recreation/relaunch. The pass covers the v1 storage revision, not the new v2 work.
+recreation/relaunch. This pass covers Room v2, not the new uncommitted SwiftData slice.
 Local domain/storage, project checks and strict artifact checks pass; no local APK
 or iOS simulator build is claimed and SDK licenses were not accepted in WSL.
-New v2 native storage tests still require CI. Signing and real health/performance
+SwiftData storage tests still require CI. Signing and real health/performance
 validation need owner credentials and physical devices.
 No cloud resources or store releases have been created.
 

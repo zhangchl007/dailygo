@@ -64,6 +64,21 @@ final class PolicyTests: XCTestCase {
         XCTAssertThrowsError(try habit.isCompleted(value: 6000))
     }
 
+    func testPartialProgressRequiresAnActiveNumericHabit() throws {
+        let steps = try HabitDefinition(title: "Walk", schedule: .daily, goal: .numeric(kind: .steps, target: 1000))
+        XCTAssertNoThrow(try steps.validateProgress(value: 0))
+        XCTAssertNoThrow(try steps.validateProgress(value: 400))
+        for value in [-1.0, Double.nan, Double.infinity, 0.5, 1000.0, 1001.0] {
+            XCTAssertThrowsError(try steps.validateProgress(value: value))
+        }
+        let distance = try HabitDefinition(title: "Run", schedule: .daily, goal: .numeric(kind: .distanceMeters, target: 1000))
+        XCTAssertNoThrow(try distance.validateProgress(value: 400.5))
+        let completion = try HabitDefinition(title: "Read", schedule: .daily, goal: .completion)
+        XCTAssertThrowsError(try completion.validateProgress(value: 0))
+        let archived = try HabitDefinition(title: "Walk", schedule: .daily, goal: .numeric(kind: .steps, target: 1000), archived: true)
+        XCTAssertThrowsError(try archived.validateProgress(value: 400))
+    }
+
     func testEvidenceIsSourceBackedAndMissingIsUnknown() throws {
         let goal = Goal.numeric(kind: .steps, target: 5000)
         let start = Date(timeIntervalSince1970: 1791280800)

@@ -1,0 +1,124 @@
+import Foundation
+import DailyGoDomain
+
+enum NativeStorageError: Error, Equatable {
+    case invalidIdentity, invalidDefinition, missingHabit, operationConflict, duplicateEntity, missingResult
+}
+
+struct NativeHabit: Codable, Equatable, Sendable {
+    let ownerID: String
+    let id: String
+    let title: String
+    let scheduleKind: String
+    let scheduleParameter: Int?
+    let goalKind: String
+    let target: Double?
+    let zoneID: String
+    let createdAtMillis: Int64
+    let archived: Bool
+
+    func definition() throws -> HabitDefinition {
+        let schedule: Schedule
+        switch scheduleKind {
+        case "daily":
+            guard scheduleParameter == nil else { throw NativeStorageError.invalidDefinition }
+            schedule = .daily
+        case "weekdays":
+            guard scheduleParameter == nil else { throw NativeStorageError.invalidDefinition }
+            schedule = .weekdays
+        case "weekly":
+            guard let parameter = scheduleParameter else { throw NativeStorageError.invalidDefinition }
+            schedule = .weekly(target: parameter)
+        default: throw NativeStorageError.invalidDefinition
+        }
+        let goal: Goal
+        switch goalKind {
+        case "completion":
+            guard target == nil else { throw NativeStorageError.invalidDefinition }
+            goal = .completion
+        case "steps", "duration_minutes", "distance_meters":
+            guard let target else { throw NativeStorageError.invalidDefinition }
+            let kind: MetricKind = goalKind == "steps" ? .steps : (goalKind == "duration_minutes" ? .durationMinutes : .distanceMeters)
+            goal = .numeric(kind: kind, target: target)
+        default: throw NativeStorageError.invalidDefinition
+        }
+        let definition = try HabitDefinition(title: title, schedule: schedule, goal: goal, archived: archived)
+        guard definition.title == title else { throw NativeStorageError.invalidDefinition }
+        _ = try CalendarPolicy.credit(now: NativeStorageEncoding.date(createdAtMillis), zoneID: zoneID)
+        return definition
+    }
+}
+
+enum NativeEntryKind: String, Codable, Sendable { case completion, progress }
+
+struct NativeEntryCommand: Codable, Sendable {
+    let ownerID: String
+    let operationID: String
+    let recordID: String
+    let habitID: String
+    let occurredAtMillis: Int64
+    let value: Double?
+    let workoutStartedAtMillis: Int64?
+    var asOfMillis: Int64?
+
+    func request() throws -> Data {
+        var normalized = self
+        normalized.asOfMillis = nil
+        return try NativeStorageEncoding.encode(normalized)
+    }
+
+    func validate() throws {
+        try NativeStorageEncoding.validateIdentity(ownerID, operationID, recordID, habitID)
+        guard occurredAtMillis <= (asOfMillis ?? occurredAtMillis) else { throw DomainError.futureDate }
+    }
+}
+
+struct NativeEntry: Codable, Equatable, Sendable {
+    let ownerID: String
+    let id: String
+    let habitID: String
+    let kind: NativeEntryKind
+    let occurredAtMillis: Int64
+    let creditedDate: String
+    let zoneID: String
+    let creditReason: CreditReason
+    let value: Double?
+}
+
+struct NativeEvent: Codable, Equatable, Sendable {
+    let ownerID: String
+    let eventID: String
+    let kind: String
+    let entityID: String
+    let payload: Data
+    let createdAtMillis: Int64
+}
+
+struct NativeReceipt: Codable, Equatable, Sendable {
+    let ownerID: String
+    let operationID: String
+    let kind: String
+    let request: Data
+    let resultID: String
+}
+
+enum NativeStorageEncoding {
+    static func encode<Value: Encodable>(_ value: Value) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(value)
+    }
+
+    static func key(_ components: String...) throws -> String {
+        try encode(components).base64EncodedString()
+    }
+
+    static func validateIdentity(_ values: String...) throws {
+        guard values.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            $0.unicodeScalars.count <= 128 && $0.rangeOfCharacter(from: .controlCharacters) == nil }) else {
+            throw NativeStorageError.invalidIdentity
+        }
+    }
+
+    static func date(_ millis: Int64) -> Date { Date(timeIntervalSince1970: Double(millis) / 1000) }
+}
