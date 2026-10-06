@@ -15,5 +15,5 @@
 .env
 .env.*
 !.env.example
-.specify/*
-!.specify/memory/
+/.specify/
+/specs/
