@@ -35,6 +35,43 @@ class LocalRepository(private val database: LocalDatabase) {
         }
     }
 
+    suspend fun recordProgress(command: ProgressCommand): ProgressRow {
+        validateIdentity(command.ownerId, command.operationId, command.recordId, command.habitId)
+        require(command.occurredAtMillis <= command.asOfMillis) { "Future progress" }
+        require(command.value.isFinite() && command.value >= 0) { "Invalid progress" }
+        val request = json.encodeToString(command.copy(asOfMillis = command.occurredAtMillis))
+        return database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                val previous = ledger.receipt(command.ownerId, command.operationId)
+                if (previous != null) {
+                    require(previous.kind == "progress.recorded" && previous.request == request) { "Operation ID conflict" }
+                    return@immediateTransaction requireNotNull(ledger.progress(command.ownerId, previous.resultId))
+                }
+                val habit = requireNotNull(ledger.habit(command.ownerId, command.habitId)) { "Habit not found" }
+                habit.definition()
+                require(!habit.archived && habit.goalKind != "completion") { "Progress requires an active numeric habit" }
+                require(command.value < requireNotNull(habit.target)) { "Use completion for a reached goal" }
+                val occurred = Instant.ofEpochMilli(command.occurredAtMillis)
+                val yesterday = occurred.atZone(ZoneId.of(habit.zoneId)).toLocalDate().minusDays(1).toString()
+                val credit = CalendarPolicy.credit(
+                    occurred, habit.zoneId, command.workoutStartedAtMillis?.let(Instant::ofEpochMilli),
+                    previousComplete = ledger.completionOn(command.ownerId, command.habitId, yesterday) != null,
+                )
+                val record = ProgressRow(
+                    command.ownerId, command.recordId, command.habitId, command.occurredAtMillis,
+                    credit.date.toString(), credit.zoneId, credit.reason.name, command.value,
+                )
+                ledger.insertProgress(record)
+                ledger.insertOutbox(OutboxRow(
+                    command.ownerId, command.operationId, "progress.recorded", record.id,
+                    json.encodeToString(record), command.occurredAtMillis,
+                ))
+                ledger.insertReceipt(MutationReceiptRow(command.ownerId, command.operationId, "progress.recorded", request, record.id))
+                record
+            }
+        }
+    }
+
     suspend fun complete(command: CompletionCommand): CheckInRow {
         validateIdentity(command.ownerId, command.operationId, command.recordId, command.habitId)
         require(command.occurredAtMillis <= command.asOfMillis) { "Future check-in" }

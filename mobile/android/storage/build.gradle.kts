@@ -7,6 +7,7 @@ plugins {
 kotlin {
     jvmToolchain(17)
     sourceSets.main { kotlin.srcDir("src/shared/kotlin") }
+    sourceSets.test { kotlin.srcDir("src/sharedTest/kotlin") }
 }
 
 dependencies {

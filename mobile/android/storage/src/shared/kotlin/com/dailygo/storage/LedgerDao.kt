@@ -8,6 +8,7 @@ import androidx.room.Query
 interface LedgerDao {
     @Insert suspend fun insertHabit(habit: HabitRow)
     @Insert suspend fun insertCheckIn(record: CheckInRow)
+    @Insert suspend fun insertProgress(record: ProgressRow)
     @Insert suspend fun insertOutbox(event: OutboxRow)
     @Insert suspend fun insertReceipt(receipt: MutationReceiptRow)
 
@@ -25,6 +26,12 @@ interface LedgerDao {
 
     @Query("SELECT * FROM check_ins WHERE ownerId = :ownerId AND habitId = :habitId AND creditedDate = :date")
     suspend fun completionOn(ownerId: String, habitId: String, date: String): CheckInRow?
+
+    @Query("SELECT * FROM progress_entries WHERE ownerId = :ownerId AND habitId = :habitId ORDER BY creditedDate, occurredAtMillis, id")
+    suspend fun progressEntries(ownerId: String, habitId: String): List<ProgressRow>
+
+    @Query("SELECT * FROM progress_entries WHERE ownerId = :ownerId AND id = :id")
+    suspend fun progress(ownerId: String, id: String): ProgressRow?
 
     @Query("SELECT * FROM outbox WHERE ownerId = :ownerId ORDER BY createdAtMillis, eventId")
     suspend fun outbox(ownerId: String): List<OutboxRow>

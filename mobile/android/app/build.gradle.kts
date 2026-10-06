@@ -25,6 +25,7 @@ android {
             java.setSrcDirs(listOf("src/main/kotlin", "../storage/src/shared/kotlin"))
             jniLibs.setSrcDirs(emptyList<String>())
         }
+        getByName("androidTest").assets.srcDir("../storage/schemas")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -47,6 +48,7 @@ android {
 kotlin {
     jvmToolchain(17)
     sourceSets.getByName("main").kotlin.setSrcDirs(listOf("src/main/kotlin", "../storage/src/shared/kotlin"))
+    sourceSets.getByName("androidTest").kotlin.srcDir("../storage/src/sharedTest/kotlin")
 }
 
 val verificationBuildTools by configurations.creating {

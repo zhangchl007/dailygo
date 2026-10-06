@@ -42,6 +42,27 @@ data class CheckInRow(
 )
 
 @Serializable
+@Entity(
+    tableName = "progress_entries",
+    primaryKeys = ["ownerId", "id"],
+    foreignKeys = [ForeignKey(
+        entity = HabitRow::class, parentColumns = ["ownerId", "id"],
+        childColumns = ["ownerId", "habitId"], onDelete = ForeignKey.CASCADE,
+    )],
+    indices = [Index("ownerId", "habitId", "creditedDate", "occurredAtMillis")],
+)
+data class ProgressRow(
+    val ownerId: String,
+    val id: String,
+    val habitId: String,
+    val occurredAtMillis: Long,
+    val creditedDate: String,
+    val zoneId: String,
+    val creditReason: String,
+    val value: Double,
+)
+
+@Serializable
 @Entity(tableName = "outbox", primaryKeys = ["ownerId", "eventId"], indices = [Index("ownerId", "createdAtMillis")])
 data class OutboxRow(
     val ownerId: String,
@@ -70,6 +91,18 @@ data class CompletionCommand(
     val habitId: String,
     val occurredAtMillis: Long,
     val value: Double?,
+    val workoutStartedAtMillis: Long? = null,
+    val asOfMillis: Long = occurredAtMillis,
+)
+
+@Serializable
+data class ProgressCommand(
+    val ownerId: String,
+    val operationId: String,
+    val recordId: String,
+    val habitId: String,
+    val occurredAtMillis: Long,
+    val value: Double,
     val workoutStartedAtMillis: Long? = null,
     val asOfMillis: Long = occurredAtMillis,
 )

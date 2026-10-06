@@ -75,14 +75,16 @@ official sources and integrity verification, and never pipe installers into a sh
   read-only HealthKit declaration, purpose string and privacy manifest.
 - Native CI jobs for APK/unit/lint/emulator checks and Xcode simulator tests.
 - P4 Room storage foundation with owner-scoped keys, immutable date credits,
-  atomic mutations/outbox receipts and ten file-backed SQLite durability tests.
+    atomic mutations/outbox receipts and 18 file-backed SQLite durability tests.
 
 ## P4 Persistence Progress
 
-The first P4 slice implements habit creation and completed check-in storage using
+P4 currently implements habit creation, completed check-ins and separate numeric
+partial-progress snapshots using
 Room 2.7.2 and Google's prebuilt bundled SQLite driver 2.5.2. It adds no Cargo,
-Rust FFI, JNA or application NDK build step. Numeric partial progress is rejected
-by this completion API; partial-progress storage is not implemented yet.
+Rust FFI, JNA or application NDK build step. The completion API rejects below-target
+values; `recordProgress` instead persists finite nonnegative values below the
+target. Snapshots are not added together and never implicitly complete a goal.
 
 Run the focused suite without an Android SDK:
 
@@ -97,12 +99,15 @@ runtime shared with iOS; iOS remains native Swift/SwiftData.
 
 File-backed tests cover habit/check-in outbox failure rollback, reopen, durable
 retries after acknowledgement, concurrent same-day completions, owner isolation,
-invalid/partial/archived rejection, and immutable grace dates. The exported Room
-v1 schema is tracked. Unknown schema versions fail without destructive migration;
-actual upgrade migrations still need implementation/evidence when the schema evolves.
+invalid/archived rejection, separate progress, and immutable grace dates across
+timezone changes. Both Room v1/v2 schemas are tracked; a real v1-to-v2 upgrade
+preserves data, pending events and retry receipts. SQLite-full writes roll back
+and can retry after space is restored. Corruption/unsupported versions surface
+without destructive recreation; backup restoration is tested.
 
-The Android builder and an instrumentation reopen test are added but not compiled
-or run here. Startup UI remains unwired to persisted workflows, which belong to
+The v1 Android builder/reopen test passed hosted CI. New progress, migration and
+recovery instrumentation tests await a new native CI run; local WSL has no SDK.
+Startup UI remains unwired to persisted workflows, which belong to
 the later product integration. Local outbox kinds are not a finalized server API.
 SwiftData, legacy SQLite import, safe export/import/deletion and native device
 recovery evidence remain open P4 work. Legacy files/databases are untouched.
@@ -150,18 +155,19 @@ permission workflows remain P5; declarations alone do not grant health access.
 
 ## Release Gates Still Open
 
-Successful Android/Xcode app builds, remaining P4 persistence/import, complete UI, actual health
+Remaining P4 persistence/import, complete UI, actual health
 queries, reminders, accounts/sync, device profiling, accessibility/localization,
-beta, signing and store disclosures remain tracked tasks. The first native CI run
-for revision `af93b37` passed Kotlin/Room, Swift domain and legacy Rust tests but
-failed Android AAPT2 dependency verification and macOS project validation.
-Those blockers have local fixes; a new remote run must confirm them before T010
-can close. Launch tests now check empty-state visibility, recreation/relaunch and
-retain screenshots. Local domain tests, Gradle configuration/artifact resolution,
-Swift startup typechecking and Xcode project-structure checks pass; no local APK or
-iOS simulator build is claimed. SDK licenses were not accepted in this WSL environment.
-First SDK builds may expose further compile/tool verification issues. iOS app,
-signing and HealthKit validation require macOS and physical devices.
+beta, signing and store disclosures remain tracked tasks. P3 native CI passed for
+`b5093b804372d847179e2d45d60e6ffc52b639b6`:
+https://github.com/zhangchl007/dailygo/actions/runs/37429669178
+Domain/Room tests, Android APK/unit/lint/emulator and Xcode simulator app/unit/UI
+all passed. Retained artifacts include APKs/reports, Android startup PNG, Swift
+domain results and iOS xcresult/logs. Launch tests check honest empty states and
+recreation/relaunch. The pass covers the v1 storage revision, not the new v2 work.
+Local domain/storage, project checks and strict artifact checks pass; no local APK
+or iOS simulator build is claimed and SDK licenses were not accepted in WSL.
+New v2 native storage tests still require CI. Signing and real health/performance
+validation need owner credentials and physical devices.
 No cloud resources or store releases have been created.
 
 # dailygo
