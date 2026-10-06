@@ -40,7 +40,7 @@ actor NativeHealthService {
                     continuation.resume(returning: NativeHealthReading(status: .failed, evidence: nil, sourceIdentifiers: []))
                     return
                 }
-                let sources = Set(statistics?.sources()?.map(\.bundleIdentifier) ?? [])
+                let sources = Set(statistics?.sources?.map(\.bundleIdentifier) ?? [])
                 guard let quantity = statistics?.sumQuantity(), !sources.isEmpty,
                       let evidence = try? HealthEvidence(source: .healthKit, startedAt: window.startedAt,
                           endedAt: window.endedAt, steps: quantity.doubleValue(for: .count())) else {
