@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {"name":"empty","schedule":"daily","asOf":"2026-10-06","dates":[],"expected":{"current":0,"longest":0,"total":0,"shields":0,"today":false}},
+    {"name":"daily-completed-today","schedule":"daily","asOf":"2026-10-06","ranges":[{"start":"2026-10-03","days":4}],"expected":{"current":4,"longest":4,"total":4,"shields":0,"today":true}},
+    {"name":"open-today-does-not-break","schedule":"daily","asOf":"2026-10-06","dates":["2026-10-04","2026-10-05"],"expected":{"current":2,"longest":2,"total":2,"shields":0,"today":false}},
+    {"name":"deduplicate-dates","schedule":"daily","asOf":"2026-10-06","dates":["2026-10-05","2026-10-06","2026-10-06"],"expected":{"current":2,"longest":2,"total":2,"shields":0,"today":true}},
+    {"name":"miss-without-shield","schedule":"daily","asOf":"2026-10-06","dates":["2026-10-03","2026-10-04","2026-10-06"],"expected":{"current":1,"longest":2,"total":3,"shields":0,"today":true}},
+    {"name":"weekdays-friday-to-monday","schedule":"weekdays","asOf":"2026-10-05","dates":["2026-10-02","2026-10-05"],"expected":{"current":2,"longest":2,"total":2,"shields":0,"today":true}},
+    {"name":"weekday-weekend-is-not-required","schedule":"weekdays","asOf":"2026-10-04","dates":["2026-10-01","2026-10-02","2026-10-03"],"expected":{"current":2,"longest":2,"total":3,"shields":0,"today":false}},
+    {"name":"earn-seventh-day-shield","schedule":"daily","asOf":"2026-09-26","ranges":[{"start":"2026-09-20","days":7}],"expected":{"current":7,"longest":7,"total":7,"shields":1,"today":true}},
+    {"name":"missed-yesterday-consumes-shield","schedule":"daily","asOf":"2026-09-28","ranges":[{"start":"2026-09-20","days":7}],"expected":{"current":7,"longest":7,"total":7,"shields":0,"today":false}},
+    {"name":"shield-bridges-before-check-in","schedule":"daily","asOf":"2026-09-28","ranges":[{"start":"2026-09-20","days":7}],"dates":["2026-09-28"],"expected":{"current":8,"longest":8,"total":8,"shields":0,"today":true}},
+    {"name":"two-shields-cover-two-closed-misses","schedule":"daily","asOf":"2026-09-17","ranges":[{"start":"2026-09-01","days":14}],"expected":{"current":14,"longest":14,"total":14,"shields":0,"today":false}},
+    {"name":"shields-capped-at-three","schedule":"daily","asOf":"2026-09-28","ranges":[{"start":"2026-09-01","days":28}],"expected":{"current":28,"longest":28,"total":28,"shields":3,"today":true}},
+    {"name":"weekly-target-open-week","schedule":"weekly","target":3,"asOf":"2026-10-06","dates":["2026-09-28","2026-09-30","2026-10-02","2026-10-05"],"expected":{"current":1,"longest":1,"total":4,"shields":0,"today":false}},
+    {"name":"weekly-target-two-completed-weeks","schedule":"weekly","target":3,"asOf":"2026-10-09","dates":["2026-09-28","2026-09-30","2026-10-02","2026-10-05","2026-10-07","2026-10-09"],"expected":{"current":2,"longest":2,"total":6,"shields":0,"today":true}},
+    {"name":"weekly-target-closed-miss-breaks","schedule":"weekly","target":2,"asOf":"2026-10-12","dates":["2026-09-28","2026-09-30","2026-10-05"],"expected":{"current":0,"longest":1,"total":3,"shields":0,"today":false}},
+    {"name":"future-date-rejected","schedule":"daily","asOf":"2026-10-06","dates":["2026-10-07"],"error":true},
+    {"name":"invalid-calendar-date-rejected","schedule":"daily","asOf":"2026-10-06","dates":["2026-02-30"],"error":true},
+    {"name":"invalid-as-of-rejected","schedule":"daily","asOf":"not-a-date","dates":[],"error":true},
+    {"name":"invalid-weekly-target-rejected","schedule":"weekly","target":0,"asOf":"2026-10-06","dates":[],"error":true}
+  ]
+}

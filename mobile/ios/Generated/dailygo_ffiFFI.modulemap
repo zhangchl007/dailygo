@@ -1,0 +1,4 @@
+module dailygo_ffiFFI {
+    header "dailygo_ffiFFI.h"
+    export *
+}

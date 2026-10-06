@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {"name":"utc-date","now":"2026-10-06T12:00:00Z","zone":"UTC","expected":"2026-10-06"},
+    {"name":"shanghai-local-tomorrow","now":"2026-10-06T17:30:00Z","zone":"Asia/Shanghai","expected":"2026-10-07"},
+    {"name":"los-angeles-local-yesterday","now":"2026-10-06T01:30:00Z","zone":"America/Los_Angeles","expected":"2026-10-05"},
+    {"name":"manual-no-automatic-grace","now":"2026-10-06T01:30:00Z","zone":"UTC","expected":"2026-10-06"},
+    {"name":"overlapping-workout-grace","now":"2026-10-06T01:30:00Z","zone":"UTC","started":"2026-10-05T23:30:00Z","expected":"2026-10-05"},
+    {"name":"previous-already-complete","now":"2026-10-06T01:30:00Z","zone":"UTC","started":"2026-10-05T23:30:00Z","previousComplete":true,"expected":"2026-10-06"},
+    {"name":"cutoff-is-exclusive","now":"2026-10-06T03:00:00Z","zone":"UTC","started":"2026-10-05T23:30:00Z","expected":"2026-10-06"},
+    {"name":"workout-started-today","now":"2026-10-06T01:30:00Z","zone":"UTC","started":"2026-10-06T00:30:00Z","expected":"2026-10-06"},
+    {"name":"spring-dst-before-jump","now":"2026-03-08T06:30:00Z","zone":"America/New_York","started":"2026-03-08T04:30:00Z","expected":"2026-03-07"},
+    {"name":"spring-dst-after-cutoff","now":"2026-03-08T07:30:00Z","zone":"America/New_York","started":"2026-03-08T04:30:00Z","expected":"2026-03-08"},
+    {"name":"fall-dst-repeated-hour","now":"2026-11-01T06:30:00Z","zone":"America/New_York","started":"2026-11-01T03:30:00Z","expected":"2026-10-31"},
+    {"name":"disabled-grace","now":"2026-10-06T01:30:00Z","zone":"UTC","started":"2026-10-05T23:30:00Z","graceHours":0,"expected":"2026-10-06"},
+    {"name":"invalid-zone","now":"2026-10-06T01:30:00Z","zone":"Not/AZone","error":true},
+    {"name":"future-workout-start","now":"2026-10-06T01:30:00Z","zone":"UTC","started":"2026-10-06T02:30:00Z","error":true},
+    {"name":"invalid-grace","now":"2026-10-06T01:30:00Z","zone":"UTC","graceHours":25,"error":true}
+  ]
+}
