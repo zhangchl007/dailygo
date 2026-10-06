@@ -132,7 +132,7 @@ class RoomStorageTest {
             database.close()
             database = openLocalDatabase(context, name)
             assertEquals(preserved, database.ledger().checkIns("guest", "walk").single())
-            assertEquals(400.0, database.ledger().progressEntries("guest", "walk").single().value)
+            assertEquals(400.0, database.ledger().progressEntries("guest", "walk").single().value, 0.0)
             assertEquals(2, database.ledger().outbox("guest").size)
         } finally {
             database.close()
