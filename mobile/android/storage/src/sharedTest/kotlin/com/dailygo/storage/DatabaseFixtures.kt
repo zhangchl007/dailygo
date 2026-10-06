@@ -14,10 +14,11 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-fun createVersionOneDatabase(path: String, schemaText: String, habit: HabitRow, command: CompletionCommand): CheckInRow {
+fun createPriorDatabase(path: String, schemaText: String, habit: HabitRow, command: CompletionCommand): CheckInRow {
     val json = Json { encodeDefaults = true }
     val schema = Json.parseToJsonElement(schemaText).jsonObject.getValue("database").jsonObject
-    require(schema.getValue("version").jsonPrimitive.content == "1")
+    val version = schema.getValue("version").jsonPrimitive.content.toInt()
+    require(version in 1..2)
     val credit = CalendarPolicy.credit(Instant.ofEpochMilli(command.occurredAtMillis), habit.zoneId)
     val record = CheckInRow(command.ownerId, command.recordId, command.habitId, command.occurredAtMillis,
         credit.date.toString(), credit.zoneId, credit.reason.name, command.value)
@@ -35,7 +36,7 @@ fun createVersionOneDatabase(path: String, schemaText: String, habit: HabitRow, 
             }
         }
         for (query in schema.getValue("setupQueries").jsonArray) connection.execSQL(query.jsonPrimitive.content)
-        connection.execSQL("PRAGMA user_version = 1")
+        connection.execSQL("PRAGMA user_version = $version")
         connection.insertFixture("habits", Json.parseToJsonElement(habitRequest).jsonObject)
         connection.insertFixture("check_ins", Json.parseToJsonElement(json.encodeToString(record)).jsonObject)
         for (event in listOf(

@@ -75,7 +75,7 @@ official sources and integrity verification, and never pipe installers into a sh
   read-only HealthKit declaration, purpose string and privacy manifest.
 - Native CI jobs for APK/unit/lint/emulator checks and Xcode simulator tests.
 - P4 Room storage foundation with owner-scoped keys, immutable date credits,
-    atomic mutations/outbox receipts and 18 file-backed SQLite durability tests.
+    atomic mutations/outbox receipts and 26 file-backed SQLite durability tests.
 
 ## P4 Persistence Progress
 
@@ -105,24 +105,46 @@ preserves data, pending events and retry receipts. SQLite-full writes roll back
 and can retry after space is restored. Corruption/unsupported versions surface
 without destructive recreation; backup restoration is tested.
 
-Room v2 passed hosted CI at `0807ebd` (run 37433704470): APK/unit/lint and
-all seven Android instrumentation tests, including progress, migration and
-recovery. Local WSL has no licensed Android SDK.
+Room v2 and the initial SwiftData slice passed hosted CI at `ac9becc8`
+(run 37436401130). Room v3 adds durable owner-deletion fences
+with preserving v1/v2 upgrade paths. Twenty-six JVM SQLite tests pass, including
+legacy import, versioned backups, atomic conflicts/deletion and disk-full import
+rollback/recovery. The new Android transfer/deletion instrumentation test still
+requires fresh native CI. Local WSL has no licensed Android SDK.
 Startup UI remains unwired to persisted workflows, which belong to
 the later product integration. Local outbox kinds are not a finalized server API.
 
-An initial SwiftData source slice now lives in `mobile/ios/Application/Storage`:
-Sendable records, a local-only versioned schema and an actor-owned repository
-with atomic entity/event/receipt saves, rollback, acknowledged retries, immutable
-date credits and separate progress. Five file-backed XCTest methods are wired
-into the Xcode test target. Production callers must share one writer actor;
-cross-repository/process concurrency is not accepted by these tests.
+SwiftData sources in `mobile/ios/Application/Storage` now include a v1-to-v2
+upgrade, unique indexed scope models/inverse relationships for owner/habit reads,
+direct result-key retry lookups, backups, legacy import and deletion fencing.
+Eleven file-backed XCTest methods are wired into Xcode for upgrade, retries,
+owner isolation, invalid imports, save rollback and unsupported/corrupt stores.
+Production callers must share one writer actor; cross-repository/process
+concurrency is not accepted by these tests.
 
-On Linux, record types are typechecked against the domain module; native storage
-sources/tests are syntax-checked only. Their Apple-framework compile and execution
-still require fresh macOS CI. SwiftData upgrade, indexed-query and disk-full/restore
-evidence, legacy SQLite import and safe export/import/deletion remain open P4 work.
-Legacy files/databases are untouched.
+Both adapters open legacy SQLite read-only and require explicit IANA timezone
+mapping and consent to treat legacy health provenance as unverified. Imported
+credits are labelled as legacy, not fabricated calendar/health evidence. Entity
+IDs, UTC instants, credited dates and pending event IDs are retained; authoritative
+outbox acknowledgements remain acknowledged even with stale legacy sync labels.
+Unresolved/invalid sources are reported without target mutation or source changes.
+
+Backups are platform-scoped version-1 JSON, bounded to 32 MiB, and preserve retry
+receipts and pending changes without raw biometric/location samples. Historical
+creation snapshots and credited timezones survive current habit timezone changes. Imports reject
+ownership/version/identity/reference/value conflicts atomically; reimport never
+resurrects an acknowledged event. Deletion clears owner data/events/receipts and
+retains only a minimal anti-resurrection fence. A new local profile needs a new
+owner ID; global account deletion and cross-platform sync remain P6.
+
+Actual Swift record/backup/SQLite3 reader compilation and contract behaviors pass
+on Linux using an integrity-verified cached header and existing SQLite runtime.
+SwiftData framework sources/tests still require fresh macOS/iOS execution.
+CI now also requires `bash scripts/native-storage-durability.sh` on macOS: a
+temporary bounded disk image tests real disk-full rollback/retry, backup restore
+and read-only legacy conversion, then is detached and removed. Its execution is
+not yet claimed. Legacy user files/databases are untouched; P4 stays open until
+all updated native gates pass.
 
 ## Native App Builds
 
@@ -170,15 +192,16 @@ permission workflows remain P5; declarations alone do not grant health access.
 Remaining P4 persistence/import, complete UI, actual health
 queries, reminders, accounts/sync, device profiling, accessibility/localization,
 beta, signing and store disclosures remain tracked tasks. Latest accepted native CI:
-`0807ebdf323bdc8b3814081dac6c897e1f75360d`:
-https://github.com/zhangchl007/dailygo/actions/runs/37433704470
+`ac9becc8b8b291aa99763a14b428fb97bd7e10f7`:
+https://github.com/zhangchl007/dailygo/actions/runs/37436401130
 Domain/Room tests, Android APK/unit/lint/emulator and Xcode simulator app/unit/UI
 all passed. Retained artifacts include APKs/reports, Android startup PNG, Swift
 domain results and iOS xcresult/logs. Launch tests check honest empty states and
-recreation/relaunch. This pass covers Room v2, not the new uncommitted SwiftData slice.
+recreation/relaunch. This pass covers Room v2 and the initial SwiftData slice,
+not the new P4 upgrade/import/backup/deletion/recovery changes.
 Local domain/storage, project checks and strict artifact checks pass; no local APK
 or iOS simulator build is claimed and SDK licenses were not accepted in WSL.
-SwiftData storage tests still require CI. Signing and real health/performance
+Updated P4 native tests still require CI. Signing and real health/performance
 validation need owner credentials and physical devices.
 No cloud resources or store releases have been created.
 

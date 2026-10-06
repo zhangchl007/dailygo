@@ -9,8 +9,59 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import androidx.sqlite.execSQL
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 
 class RoomStorageTest {
+    @Test fun legacyBackupAndDeletionRemainAtomicAndOwnerScopedAcrossReopen() = runBlocking<Unit> {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val name = "transfer-test-${UUID.randomUUID()}.db"
+        val restoredName = "restore-test-${UUID.randomUUID()}.db"
+        val source = java.io.File(context.cacheDir, "legacy-${UUID.randomUUID()}.db")
+        var database = openLocalDatabase(context, name)
+        try {
+            val fixture = Json.parseToJsonElement(instrumentation.context.assets.open("v1.json").bufferedReader().use { it.readText() }).jsonObject
+            val connection = BundledSQLiteDriver().open(source.absolutePath)
+            try { fixture.getValue("statements").jsonArray.forEach { connection.execSQL(it.jsonPrimitive.content) } }
+            finally { connection.close() }
+            val bytes = source.readBytes()
+            val repository = LocalRepository(database)
+            assertTrue(!repository.importLegacy(source.absolutePath, "guest", emptyMap(), false).imported)
+            assertTrue(database.ledger().habits("guest").isEmpty())
+            assertTrue(repository.importLegacy(source.absolutePath, "guest", mapOf("walk" to "Asia/Shanghai"), true).imported)
+            database.ledger().acknowledge("guest", "legacy-complete")
+            assertTrue(repository.importLegacy(source.absolutePath, "guest", mapOf("walk" to "Asia/Shanghai"), true).imported)
+            assertEquals(1, database.ledger().outbox("guest").size)
+            assertArrayEquals(bytes, source.readBytes())
+            val backup = repository.exportOwner("guest")
+            val restored = openLocalDatabase(context, restoredName)
+            try {
+                LocalRepository(restored).importOwner("guest", backup)
+                LocalRepository(restored).importOwner("guest", backup)
+                assertEquals(backup, LocalRepository(restored).exportOwner("guest"))
+                assertEquals("done", restored.ledger().checkIns("guest", "walk").single().id)
+            } finally { restored.close() }
+            repository.saveHabit(HabitRow("other", "walk", "Walk", "daily", null, "completion", null, "Etc/UTC", 1_791_282_600_000, false), "create")
+            repository.deleteOwner("guest")
+            database.close()
+            database = openLocalDatabase(context, name)
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { LocalRepository(database).importOwner("guest", backup) } }
+            assertTrue(database.ledger().habits("guest").isEmpty())
+            assertTrue(database.ledger().outbox("guest").isEmpty())
+            assertEquals(1, database.ledger().habits("other").size)
+        } finally {
+            database.close()
+            context.deleteDatabase(name)
+            context.deleteDatabase(restoredName)
+            source.delete()
+        }
+    }
+
     @Test fun fullDatabaseRollsBackAndCanRetryAfterSpaceIsRestored() = runBlocking<Unit> {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val name = "full-test-${UUID.randomUUID()}.db"
@@ -119,7 +170,7 @@ class RoomStorageTest {
             .bufferedReader().use { it.readText() }
         val habit = HabitRow("guest", "walk", "Walk", "daily", null, "steps", 1000.0, "Etc/UTC", 1_791_282_600_000, false)
         val command = CompletionCommand("guest", "complete", "entry", "walk", habit.createdAtMillis, 1000.0)
-        val preserved = createVersionOneDatabase(file.absolutePath, schema, habit, command)
+        val preserved = createPriorDatabase(file.absolutePath, schema, habit, command)
         var database = openLocalDatabase(context, name)
         try {
             assertEquals(habit, LocalRepository(database).saveHabit(habit, "create"))

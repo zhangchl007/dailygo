@@ -26,6 +26,7 @@ android {
             jniLibs.setSrcDirs(emptyList<String>())
         }
         getByName("androidTest").assets.srcDir("../storage/schemas")
+        getByName("androidTest").assets.srcDir("../../../tests/fixtures/legacy")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

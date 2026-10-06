@@ -83,6 +83,9 @@ data class MutationReceiptRow(
     val resultId: String,
 )
 
+@Entity(tableName = "deleted_owners", primaryKeys = ["ownerId"])
+data class DeletedOwnerRow(val ownerId: String)
+
 @Serializable
 data class CompletionCommand(
     val ownerId: String,

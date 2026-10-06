@@ -11,10 +11,89 @@ import java.time.Instant
 import java.time.ZoneId
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withContext
 
 class LocalRepository(private val database: LocalDatabase) {
     private val ledger = database.ledger()
     private val json = Json { encodeDefaults = true }
+
+    suspend fun importLegacy(path: String, ownerId: String, zones: Map<String, String>, acceptUnverified: Boolean): LegacyImportReport {
+        val candidate = try { withContext(Dispatchers.IO) { LegacyImport.read(path, ownerId, zones, acceptUnverified) } }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { return LegacyImportReport(false, listOf(LegacyIssue(null, "INVALID_LEGACY_SOURCE"))) }
+        val archive = candidate.archive ?: return LegacyImportReport(false, candidate.issues)
+        try { importOwner(ownerId, json.encodeToString(archive)) }
+        catch (_: IllegalArgumentException) { return LegacyImportReport(false, candidate.issues + LegacyIssue(null, "TARGET_CONFLICT")) }
+        return LegacyImportReport(true, candidate.issues)
+    }
+
+    suspend fun exportOwner(ownerId: String): String {
+        validateIdentity(ownerId)
+        return database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                require(!ledger.isDeleted(ownerId)) { "Owner was deleted" }
+                val archive = BackupArchive(ownerId = ownerId, habits = ledger.habits(ownerId),
+                    checkIns = ledger.allCheckIns(ownerId), progress = ledger.allProgress(ownerId),
+                    events = ledger.outbox(ownerId), receipts = ledger.allReceipts(ownerId))
+                archive.validate(ownerId, json)
+                json.encodeToString(archive).also { require(it.toByteArray(Charsets.UTF_8).size <= 32 * 1024 * 1024) { "Backup too large" } }
+            }
+        }
+    }
+
+    suspend fun importOwner(ownerId: String, contents: String) {
+        require(contents.toByteArray(Charsets.UTF_8).size <= 32 * 1024 * 1024) { "Backup too large" }
+        val archive = withContext(Dispatchers.IO) {
+            json.decodeFromString<BackupArchive>(contents).also { it.validate(ownerId, json) }
+        }
+        database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                require(!ledger.isDeleted(ownerId)) { "Owner was deleted" }
+                archive.habits.forEach { record ->
+                    val existing = ledger.habit(ownerId, record.id)
+                    require(existing == null || existing == record) { "Habit conflict" }
+                    if (existing == null) ledger.insertHabit(record)
+                }
+                archive.checkIns.forEach { record ->
+                    val existing = ledger.checkIn(ownerId, record.id)
+                    require(existing == null || existing == record) { "Check-in conflict" }
+                    if (existing == null) ledger.insertCheckIn(record)
+                }
+                archive.progress.forEach { record ->
+                    val existing = ledger.progress(ownerId, record.id)
+                    require(existing == null || existing == record) { "Progress conflict" }
+                    if (existing == null) ledger.insertProgress(record)
+                }
+                val existingEvents = ledger.outbox(ownerId).associateBy { it.eventId }
+                archive.events.forEach { record ->
+                    val existing = existingEvents[record.eventId]
+                    require(existing == null || existing == record) { "Event conflict" }
+                    if (existing == null && ledger.receipt(ownerId, record.eventId) == null) ledger.insertOutbox(record)
+                }
+                archive.receipts.forEach { record ->
+                    val existing = ledger.receipt(ownerId, record.operationId)
+                    require(existing == null || existing == record) { "Receipt conflict" }
+                    if (existing == null) ledger.insertReceipt(record)
+                }
+            }
+        }
+    }
+
+    suspend fun deleteOwner(ownerId: String) {
+        validateIdentity(ownerId)
+        database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                if (!ledger.isDeleted(ownerId)) {
+                    ledger.deleteHabits(ownerId)
+                    ledger.deleteEvents(ownerId)
+                    ledger.deleteReceipts(ownerId)
+                    ledger.insertDeletedOwner(DeletedOwnerRow(ownerId))
+                }
+            }
+        }
+    }
 
     suspend fun saveHabit(habit: HabitRow, operationId: String): HabitRow {
         validateIdentity(habit.ownerId, habit.id, operationId)
@@ -22,6 +101,7 @@ class LocalRepository(private val database: LocalDatabase) {
         val request = json.encodeToString(habit)
         return database.useWriterConnection { connection ->
             connection.immediateTransaction {
+                require(!ledger.isDeleted(habit.ownerId)) { "Owner was deleted" }
                 val previous = ledger.receipt(habit.ownerId, operationId)
                 if (previous != null) {
                     require(previous.kind == "habit.created" && previous.request == request) { "Operation ID conflict" }
@@ -42,15 +122,16 @@ class LocalRepository(private val database: LocalDatabase) {
         val request = json.encodeToString(command.copy(asOfMillis = command.occurredAtMillis))
         return database.useWriterConnection { connection ->
             connection.immediateTransaction {
+                require(!ledger.isDeleted(command.ownerId)) { "Owner was deleted" }
                 val previous = ledger.receipt(command.ownerId, command.operationId)
                 if (previous != null) {
                     require(previous.kind == "progress.recorded" && previous.request == request) { "Operation ID conflict" }
                     return@immediateTransaction requireNotNull(ledger.progress(command.ownerId, previous.resultId))
                 }
                 val habit = requireNotNull(ledger.habit(command.ownerId, command.habitId)) { "Habit not found" }
-                habit.definition()
+                val definition = habit.definition()
                 require(!habit.archived && habit.goalKind != "completion") { "Progress requires an active numeric habit" }
-                require(command.value < requireNotNull(habit.target)) { "Use completion for a reached goal" }
+                require(!definition.goal.isCompleted(command.value)) { "Use completion for a reached goal" }
                 val occurred = Instant.ofEpochMilli(command.occurredAtMillis)
                 val yesterday = occurred.atZone(ZoneId.of(habit.zoneId)).toLocalDate().minusDays(1).toString()
                 val credit = CalendarPolicy.credit(
@@ -78,6 +159,7 @@ class LocalRepository(private val database: LocalDatabase) {
         val request = json.encodeToString(command.copy(asOfMillis = command.occurredAtMillis))
         return database.useWriterConnection { connection ->
             connection.immediateTransaction {
+                require(!ledger.isDeleted(command.ownerId)) { "Owner was deleted" }
                 val previous = ledger.receipt(command.ownerId, command.operationId)
                 if (previous != null) {
                     require(previous.kind == "checkin.completed" && previous.request == request) { "Operation ID conflict" }

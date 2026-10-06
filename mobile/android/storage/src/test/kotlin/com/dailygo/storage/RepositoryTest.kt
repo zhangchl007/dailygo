@@ -6,6 +6,8 @@ import java.nio.file.StandardCopyOption
 import java.time.Instant
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import androidx.sqlite.execSQL
+import androidx.room.immediateTransaction
+import androidx.room.useWriterConnection
 import com.dailygo.domain.CalendarPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -14,6 +16,10 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 
 private inline fun <Result> LocalDatabase.use(block: (LocalDatabase) -> Result): Result {
     try {
@@ -30,12 +36,200 @@ class RepositoryTest {
         owner, "walk", "Walk", "daily", null, "completion", null, "Asia/Shanghai", instant, false,
     )
 
+    @Test fun `owner deletion survives reopen and fences old retries without affecting another owner`() = runBlocking<Unit> {
+        val path = directory.resolve("delete-owner.db").toString()
+        val original = habit().copy(goalKind = "steps", target = 1000.0)
+        val command = ProgressCommand("guest", "progress", "entry", "walk", instant, 400.0)
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(original, "create")
+            repository.saveHabit(original.copy(ownerId = "other"), "create")
+            repository.recordProgress(command)
+            repository.complete(CompletionCommand("guest", "complete", "done", "walk", instant, 1000.0))
+            repository.deleteOwner("guest")
+            repository.deleteOwner("guest")
+            assertTrue(database.ledger().habits("guest").isEmpty())
+            assertTrue(database.ledger().checkIns("guest", "walk").isEmpty())
+            assertTrue(database.ledger().progressEntries("guest", "walk").isEmpty())
+            assertTrue(database.ledger().outbox("guest").isEmpty())
+            assertNull(database.ledger().receipt("guest", "create"))
+            assertEquals(1, database.ledger().habits("other").size)
+            assertEquals(1, database.ledger().outbox("other").size)
+        }
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.saveHabit(original, "create") } }
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.recordProgress(command) } }
+            assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { repository.complete(CompletionCommand("guest", "complete", "done", "walk", instant, 1000.0)) }
+            }
+            assertTrue(database.ledger().habits("guest").isEmpty())
+        }
+    }
+
+    @Test fun `versioned backup restores records pending events and acknowledged retry state`() = runBlocking<Unit> {
+        val source = directory.resolve("export.db").toString()
+        val target = directory.resolve("import.db").toString()
+        val original = habit().copy(goalKind = "steps", target = 1000.0)
+        val command = ProgressCommand("guest", "progress", "entry", "walk", instant, 400.0)
+        val backup = openLocalDatabase(source).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(original, "create")
+            repository.saveHabit(habit("other"), "create")
+            repository.recordProgress(command)
+            repository.complete(CompletionCommand("guest", "complete", "done", "walk", instant, 1000.0))
+            database.ledger().acknowledge("guest", "progress")
+            database.useWriterConnection { connection ->
+                connection.usePrepared("UPDATE habits SET zoneId = 'America/New_York' WHERE ownerId = 'guest' AND id = 'walk'") { it.step() }
+            }
+            repository.exportOwner("guest")
+        }
+        openLocalDatabase(target).use { database ->
+            val repository = LocalRepository(database)
+            repository.importOwner("guest", backup)
+            repository.importOwner("guest", backup)
+            assertEquals(original.copy(zoneId = "America/New_York"), database.ledger().habit("guest", "walk"))
+            assertEquals(1, database.ledger().progressEntries("guest", "walk").size)
+            assertEquals("Asia/Shanghai", database.ledger().progressEntries("guest", "walk").single().zoneId)
+            assertEquals(1, database.ledger().checkIns("guest", "walk").size)
+            assertEquals(2, database.ledger().outbox("guest").size)
+            assertTrue(database.ledger().habits("other").isEmpty())
+            repository.recordProgress(command.copy(asOfMillis = instant + 1000))
+            assertEquals(2, database.ledger().outbox("guest").size)
+            assertEquals(backup, repository.exportOwner("guest"))
+            repository.deleteOwner("guest")
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.importOwner("guest", backup) } }
+        }
+    }
+
+    @Test fun `backup rejects malformed versions ownership duplicates and conflicts atomically`() = runBlocking<Unit> {
+        val backup = openLocalDatabase(directory.resolve("backup-source.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit().copy(id = "first"), "first")
+            repository.saveHabit(habit(), "create")
+            repository.exportOwner("guest")
+        }
+        openLocalDatabase(directory.resolve("backup-target.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit().copy(title = "Existing"), "existing")
+            for (invalid in listOf("{", backup.replace("\"version\":1", "\"version\":99"),
+                backup.replace("\"ownerId\":\"guest\"", "\"ownerId\":\"other\""), backup)) {
+                assertThrows(Exception::class.java) { runBlocking { repository.importOwner("guest", invalid) } }
+                assertEquals(listOf("Existing"), database.ledger().habits("guest").map { it.title })
+                assertEquals(1, database.ledger().outbox("guest").size)
+                assertNull(database.ledger().receipt("guest", "first"))
+            }
+            database.useWriterConnection { connection ->
+                connection.immediateTransaction {
+                    connection.usePrepared("CREATE TRIGGER fail_delete BEFORE DELETE ON mutation_receipts BEGIN SELECT RAISE(ABORT, 'delete failure'); END") { it.step() }
+                }
+            }
+            assertThrows(Exception::class.java) { runBlocking { repository.deleteOwner("guest") } }
+            assertFalse(database.ledger().isDeleted("guest"))
+            assertEquals(1, database.ledger().habits("guest").size)
+            assertEquals(1, database.ledger().outbox("guest").size)
+        }
+    }
+
+    @Test fun `legacy import requires explicit resolutions preserves pending changes and never alters source`() = runBlocking<Unit> {
+        val source = directory.resolve("legacy.db")
+        val fixture = Json.parseToJsonElement(Files.readString(Path.of("../../../tests/fixtures/legacy/v1.json"))).jsonObject
+        val connection = BundledSQLiteDriver().open(source.toString())
+        try { fixture.getValue("statements").jsonArray.forEach { connection.execSQL(it.jsonPrimitive.content) } }
+        finally { connection.close() }
+        val originalBytes = Files.readAllBytes(source)
+        openLocalDatabase(directory.resolve("legacy-target.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            val unresolved = repository.importLegacy(source.toString(), "guest", emptyMap(), false)
+            assertFalse(unresolved.imported)
+            assertTrue(unresolved.issues.isNotEmpty())
+            assertTrue(database.ledger().habits("guest").isEmpty())
+            assertNotNull(LegacyImport.read(source.toString(), "guest", mapOf("walk" to "Asia/Shanghai"), true).archive)
+            val resolved = repository.importLegacy(source.toString(), "guest", mapOf("walk" to "Asia/Shanghai"), true)
+            assertTrue(resolved.imported)
+            assertTrue(resolved.issues.any { it.code == "UNVERIFIED_PROVENANCE" })
+            assertEquals(instant, database.ledger().checkIn("guest", "done")!!.occurredAtMillis)
+            assertEquals("2026-10-06", database.ledger().checkIn("guest", "done")!!.creditedDate)
+            assertEquals("LEGACY_IMPORTED", database.ledger().checkIn("guest", "done")!!.creditReason)
+            assertEquals(setOf("legacy-create", "legacy-complete"), database.ledger().outbox("guest").map { it.eventId }.toSet())
+            database.ledger().acknowledge("guest", "legacy-complete")
+            assertTrue(repository.importLegacy(source.toString(), "guest", mapOf("walk" to "Asia/Shanghai"), true).imported)
+            assertEquals(1, database.ledger().outbox("guest").size)
+            assertEquals(1, database.ledger().checkIns("guest", "walk").size)
+            val archive = repository.exportOwner("guest")
+            assertTrue(archive.contains("LEGACY_IMPORTED"))
+        }
+        assertArrayEquals(originalBytes, Files.readAllBytes(source))
+        assertFalse(Files.exists(Path.of(source.toString() + "-wal")))
+    }
+
+    @Test fun `fractional step progress and malformed legacy sources leave no target mutation`() = runBlocking<Unit> {
+        val source = directory.resolve("invalid-legacy.db")
+        val fixture = Json.parseToJsonElement(Files.readString(Path.of("../../../tests/fixtures/legacy/v1.json"))).jsonObject
+        val connection = BundledSQLiteDriver().open(source.toString())
+        try {
+            fixture.getValue("statements").jsonArray.forEach { connection.execSQL(it.jsonPrimitive.content) }
+            connection.execSQL("UPDATE check_in_records SET local_date = 'not-a-date'")
+        } finally { connection.close() }
+        val bytes = Files.readAllBytes(source)
+        openLocalDatabase(directory.resolve("invalid-target.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            assertFalse(repository.importLegacy(source.toString(), "guest", mapOf("walk" to "Asia/Shanghai"), true).imported)
+            assertTrue(database.ledger().habits("guest").isEmpty())
+            repository.saveHabit(habit().copy(goalKind = "steps", target = 1000.0), "create")
+            assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { repository.recordProgress(ProgressCommand("guest", "partial", "entry", "walk", instant, 0.5)) }
+            }
+            assertTrue(database.ledger().progressEntries("guest", "walk").isEmpty())
+            assertEquals(1, database.ledger().outbox("guest").size)
+        }
+        assertArrayEquals(bytes, Files.readAllBytes(source))
+    }
+
+    @Test fun `backup disk-full rollback leaves no imported records and can recover`() = runBlocking<Unit> {
+        val backup = openLocalDatabase(directory.resolve("full-import-source.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit(), "create")
+            repository.exportOwner("guest")
+        }
+        openLocalDatabase(directory.resolve("full-import-target.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            constrainOutboxSpace(database)
+            assertThrows(Exception::class.java) { runBlocking { repository.importOwner("guest", backup) } }
+            assertTrue(database.ledger().habits("guest").isEmpty())
+            assertTrue(database.ledger().outbox("guest").isEmpty())
+            assertNull(database.ledger().receipt("guest", "create"))
+            restoreOutboxSpace(database)
+            repository.importOwner("guest", backup)
+            assertEquals(backup, repository.exportOwner("guest"))
+        }
+    }
+
+    @Test fun `synced legacy outbox preserves acknowledgements despite stale pending record status`() = runBlocking<Unit> {
+        val source = directory.resolve("synced-legacy.db")
+        val fixture = Json.parseToJsonElement(Files.readString(Path.of("../../../tests/fixtures/legacy/v1.json"))).jsonObject
+        val connection = BundledSQLiteDriver().open(source.toString())
+        try {
+            fixture.getValue("statements").jsonArray.forEach { connection.execSQL(it.jsonPrimitive.content) }
+            connection.execSQL("UPDATE sync_outbox SET is_synced = 1")
+        } finally { connection.close() }
+        openLocalDatabase(directory.resolve("synced-target.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            assertTrue(repository.importLegacy(source.toString(), "guest", mapOf("walk" to "Asia/Shanghai"), true).imported)
+            assertTrue(database.ledger().outbox("guest").isEmpty())
+            assertNotNull(database.ledger().receipt("guest", "legacy-complete"))
+            assertEquals(1, database.ledger().checkIns("guest", "walk").size)
+            assertTrue(repository.importLegacy(source.toString(), "guest", mapOf("walk" to "Asia/Shanghai"), true).imported)
+            assertTrue(database.ledger().outbox("guest").isEmpty())
+        }
+    }
+
     @Test fun `v1 upgrades preserve habits credit pending events and retry receipts`() = runBlocking<Unit> {
         val path = directory.resolve("upgrade.db").toString()
         val original = habit().copy(goalKind = "steps", target = 1000.0)
         val command = CompletionCommand("guest", "complete", "entry", "walk", instant, 1000.0)
         val credit = CalendarPolicy.credit(Instant.ofEpochMilli(instant), original.zoneId)
-        val preservedRecord = createVersionOneDatabase(path, Files.readString(
+        val preservedRecord = createPriorDatabase(path, Files.readString(
             Path.of("schemas/com.dailygo.storage.LocalDatabase/1.json"),
         ), original, command)
         openLocalDatabase(path).use { database ->
@@ -58,6 +252,22 @@ class RepositoryTest {
             assertEquals(1, database.ledger().checkIns("guest", "walk").size)
             assertEquals(400.0, database.ledger().progressEntries("guest", "walk").single().value)
             assertEquals(2, database.ledger().outbox("guest").size)
+        }
+    }
+
+    @Test fun `v2 upgrade preserves pending records and adds durable deletion fencing`() = runBlocking<Unit> {
+        val path = directory.resolve("upgrade-v2.db").toString()
+        val command = CompletionCommand("guest", "complete", "entry", "walk", instant, null)
+        val original = createPriorDatabase(path, Files.readString(Path.of("schemas/com.dailygo.storage.LocalDatabase/2.json")), habit(), command)
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            assertEquals(original, repository.complete(command))
+            assertEquals(2, database.ledger().outbox("guest").size)
+            repository.deleteOwner("guest")
+        }
+        openLocalDatabase(path).use { database ->
+            assertTrue(database.ledger().isDeleted("guest"))
+            assertTrue(database.ledger().habits("guest").isEmpty())
         }
     }
 

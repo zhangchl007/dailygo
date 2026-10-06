@@ -2,7 +2,7 @@ import Foundation
 import DailyGoDomain
 
 enum NativeStorageError: Error, Equatable {
-    case invalidIdentity, invalidDefinition, missingHabit, operationConflict, duplicateEntity, missingResult
+    case invalidIdentity, invalidDefinition, missingHabit, operationConflict, duplicateEntity, missingResult, deletedOwner, invalidStore
 }
 
 struct NativeHabit: Codable, Equatable, Sendable {
@@ -70,6 +70,7 @@ struct NativeEntryCommand: Codable, Sendable {
     func validate() throws {
         try NativeStorageEncoding.validateIdentity(ownerID, operationID, recordID, habitID)
         guard occurredAtMillis <= (asOfMillis ?? occurredAtMillis) else { throw DomainError.futureDate }
+        guard workoutStartedAtMillis.map({ $0 <= occurredAtMillis }) ?? true else { throw DomainError.invalidDate }
     }
 }
 
@@ -100,9 +101,18 @@ struct NativeReceipt: Codable, Equatable, Sendable {
     let kind: String
     let request: Data
     let resultID: String
+    var resultKey: String? = nil
 }
 
 enum NativeStorageEncoding {
+    static func decode<Value: Codable>(_ type: Value.Type, from data: Data) throws -> Value {
+        let value = try JSONDecoder().decode(type, from: data)
+        let original = try JSONSerialization.jsonObject(with: data) as? NSDictionary
+        let canonical = try JSONSerialization.jsonObject(with: encode(value)) as? NSDictionary
+        guard let original, let canonical, original == canonical else { throw NativeStorageError.invalidDefinition }
+        return value
+    }
+
     static func encode<Value: Encodable>(_ value: Value) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

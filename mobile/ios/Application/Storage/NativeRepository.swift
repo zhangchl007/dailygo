@@ -4,11 +4,85 @@ import DailyGoDomain
 
 @ModelActor
 actor NativeRepository {
+    func importLegacy(url: URL, ownerID: String, zones: [String: String], acceptUnverified: Bool) throws -> NativeLegacyReport {
+        let candidate: (NativeBackup?, [NativeLegacyIssue])
+        do { candidate = try NativeLegacy.read(url: url, ownerID: ownerID, zones: zones, acceptUnverified: acceptUnverified) }
+        catch { return NativeLegacyReport(imported: false, issues: [NativeLegacyIssue(entityID: nil, code: "INVALID_LEGACY_SOURCE")]) }
+        guard let backup = candidate.0 else { return NativeLegacyReport(imported: false, issues: candidate.1) }
+        do { try importOwner(ownerID: ownerID, contents: NativeStorageEncoding.encode(backup)) }
+        catch NativeStorageError.operationConflict {
+            return NativeLegacyReport(imported: false, issues: candidate.1 + [NativeLegacyIssue(entityID: nil, code: "TARGET_CONFLICT")])
+        }
+        return NativeLegacyReport(imported: true, issues: candidate.1)
+    }
+
+    func exportOwner(ownerID: String) throws -> Data {
+        try requireActive(ownerID: ownerID)
+        let entries = try rows(ownerID: ownerID, category: "completion").map { try decode(NativeEntry.self, $0) } +
+            rows(ownerID: ownerID, category: "progress").map { try decode(NativeEntry.self, $0) }
+        let backup = NativeBackup(ownerID: ownerID, habits: try habits(ownerID: ownerID),
+            entries: entries.sorted { ($0.kind.rawValue, $0.id) < ($1.kind.rawValue, $1.id) }, events: try events(ownerID: ownerID),
+            receipts: try rows(ownerID: ownerID, category: "receipt").map { try decode(NativeReceipt.self, $0) }.sorted { $0.operationID < $1.operationID })
+        try backup.validate(ownerID: ownerID)
+        let contents = try NativeStorageEncoding.encode(backup)
+        guard contents.count <= 32 * 1024 * 1024 else { throw NativeStorageError.invalidDefinition }
+        return contents
+    }
+
+    func importOwner(ownerID: String, contents: Data) throws {
+        guard contents.count <= 32 * 1024 * 1024 else { throw NativeStorageError.invalidDefinition }
+        let backup = try NativeStorageEncoding.decode(NativeBackup.self, from: contents)
+        try backup.validate(ownerID: ownerID)
+        try mutate {
+            try requireActive(ownerID: ownerID)
+            for habit in backup.habits { try merge(ownerID: ownerID, category: "habit", identifier: habit.id, keyID: habit.id, value: habit) }
+            for entry in backup.entries {
+                let keyID = entry.kind == .completion ? try NativeStorageEncoding.key(entry.habitID, entry.creditedDate) : entry.id
+                if let existing = try entryRow(ownerID: ownerID, category: entry.kind.rawValue, identifier: entry.id) {
+                    guard try decode(NativeEntry.self, existing) == entry else { throw NativeStorageError.operationConflict }
+                }
+                try merge(ownerID: ownerID, category: entry.kind.rawValue, identifier: entry.id, keyID: keyID, value: entry)
+            }
+            for event in backup.events {
+                if try row(ownerID: ownerID, category: "event", keyID: event.eventID) != nil || receipt(ownerID: ownerID, operationID: event.eventID) == nil {
+                    try merge(ownerID: ownerID, category: "event", identifier: event.eventID, keyID: event.eventID, value: event)
+                }
+            }
+            for receipt in backup.receipts { try merge(ownerID: ownerID, category: "receipt", identifier: receipt.operationID, keyID: receipt.operationID, value: receipt) }
+        }
+    }
+
+    func deleteOwner(ownerID: String) throws {
+        try NativeStorageEncoding.validateIdentity(ownerID)
+        try mutate {
+            if try row(ownerID: ownerID, category: "deleted", keyID: ownerID) != nil { return }
+            let descriptor = FetchDescriptor<NativeLedgerRow>(predicate: #Predicate { $0.ownerID == ownerID })
+            for record in try modelContext.fetch(descriptor) { modelContext.delete(record) }
+            let scopes = FetchDescriptor<NativeScopeRow>(predicate: #Predicate { $0.ownerID == ownerID })
+            for scope in try modelContext.fetch(scopes) { modelContext.delete(scope) }
+            try append(ownerID: ownerID, category: "deleted", identifier: ownerID, keyID: ownerID, value: ["deleted": true])
+        }
+    }
+
+    private func requireActive(ownerID: String) throws {
+        try NativeStorageEncoding.validateIdentity(ownerID)
+        guard try row(ownerID: ownerID, category: "deleted", keyID: ownerID) == nil else { throw NativeStorageError.deletedOwner }
+    }
+
+    private func merge<Value: Encodable>(ownerID: String, category: String, identifier: String, keyID: String, value: Value) throws {
+        if let existing = try row(ownerID: ownerID, category: category, keyID: keyID) {
+            guard existing.payload == (try NativeStorageEncoding.encode(value)) else { throw NativeStorageError.operationConflict }
+        } else {
+            try append(ownerID: ownerID, category: category, identifier: identifier, keyID: keyID, value: value)
+        }
+    }
+
     func saveHabit(_ habit: NativeHabit, operationID: String) throws -> NativeHabit {
         try NativeStorageEncoding.validateIdentity(habit.ownerID, habit.id, operationID)
         _ = try habit.definition()
         let request = try NativeStorageEncoding.encode(habit)
         return try mutate {
+            try requireActive(ownerID: habit.ownerID)
             if let previous = try receipt(ownerID: habit.ownerID, operationID: operationID) {
                 guard previous.kind == "habit.created", previous.request == request else { throw NativeStorageError.operationConflict }
                 guard let row = try row(ownerID: habit.ownerID, category: "habit", keyID: previous.resultID) else {
@@ -30,8 +104,7 @@ actor NativeRepository {
 
     func entries(ownerID: String, habitID: String, kind: NativeEntryKind) throws -> [NativeEntry] {
         try NativeStorageEncoding.validateIdentity(ownerID, habitID)
-        return try rows(ownerID: ownerID, category: kind.rawValue).map { try decode(NativeEntry.self, $0) }
-            .filter { $0.habitID == habitID }
+        return try scopeRows(ownerID: ownerID, category: kind.rawValue, habitID: habitID).map { try decode(NativeEntry.self, $0) }
             .sorted { ($0.creditedDate, $0.occurredAtMillis, $0.id) < ($1.creditedDate, $1.occurredAtMillis, $1.id) }
     }
 
@@ -64,9 +137,13 @@ actor NativeRepository {
         let request = try command.request()
         let eventKind = kind == .completion ? "checkin.completed" : "progress.recorded"
         return try mutate {
+            try requireActive(ownerID: command.ownerID)
             if let previous = try receipt(ownerID: command.ownerID, operationID: command.operationID) {
                 guard previous.kind == eventKind, previous.request == request else { throw NativeStorageError.operationConflict }
-                guard let row = try entryRow(ownerID: command.ownerID, category: kind.rawValue, identifier: previous.resultID) else {
+                let existing: NativeLedgerRow?
+                if let key = previous.resultKey { existing = try row(ownerID: command.ownerID, category: kind.rawValue, keyID: key) }
+                else { existing = try entryRow(ownerID: command.ownerID, category: kind.rawValue, identifier: previous.resultID) }
+                guard let row = existing else {
                     throw NativeStorageError.missingResult
                 }
                 return try decode(NativeEntry.self, row)
@@ -106,7 +183,7 @@ actor NativeRepository {
                     payload: try NativeStorageEncoding.encode(result), createdAtMillis: command.occurredAtMillis))
             }
             try appendReceipt(NativeReceipt(ownerID: command.ownerID, operationID: command.operationID, kind: eventKind,
-                                            request: request, resultID: result.id))
+                                            request: request, resultID: result.id, resultKey: keyID))
             return result
         }
     }
@@ -131,23 +208,27 @@ actor NativeRepository {
     }
 
     private func entryRow(ownerID: String, category: String, identifier: String) throws -> NativeLedgerRow? {
-        var descriptor = FetchDescriptor<NativeLedgerRow>(predicate: #Predicate {
-            $0.ownerID == ownerID && $0.category == category && $0.identifier == identifier
-        })
-        descriptor.fetchLimit = 1
-        return try modelContext.fetch(descriptor).first
+        try rows(ownerID: ownerID, category: category).first { $0.identifier == identifier }
     }
 
     private func rows(ownerID: String, category: String) throws -> [NativeLedgerRow] {
-        try modelContext.fetch(FetchDescriptor<NativeLedgerRow>(predicate: #Predicate {
-            $0.ownerID == ownerID && $0.category == category
-        }))
+        try scopeRows(ownerID: ownerID, category: category)
+    }
+
+    private func scopeRows(ownerID: String, category: String, habitID: String = "") throws -> [NativeLedgerRow] {
+        let key = try NativeStorageEncoding.key(ownerID, category, habitID)
+        var descriptor = FetchDescriptor<NativeScopeRow>(predicate: #Predicate { $0.key == key })
+        descriptor.fetchLimit = 1
+        guard let scope = try modelContext.fetch(descriptor).first else { return [] }
+        return habitID.isEmpty ? scope.records : scope.entries
     }
 
     private func append<Value: Encodable>(ownerID: String, category: String, identifier: String, keyID: String, value: Value) throws {
         guard try row(ownerID: ownerID, category: category, keyID: keyID) == nil else { throw NativeStorageError.duplicateEntity }
-        modelContext.insert(NativeLedgerRow(key: try NativeStorageEncoding.key(ownerID, category, keyID), ownerID: ownerID,
-                                           category: category, identifier: identifier, payload: try NativeStorageEncoding.encode(value)))
+        let record = NativeLedgerRow(key: try NativeStorageEncoding.key(ownerID, category, keyID), ownerID: ownerID,
+                        category: category, identifier: identifier, payload: try NativeStorageEncoding.encode(value))
+        modelContext.insert(record)
+        try NativeIndexes.attach(record, context: modelContext)
     }
 
     private func appendEvent(_ event: NativeEvent) throws {

@@ -120,6 +120,10 @@ jobs:
           set -o pipefail
           mkdir -p .tools
           bash scripts/ios-test.sh 2>&1 | tee .tools/ios-build-tests.log
+      - name: Verify SwiftData disk-full rollback, recovery and legacy backup restoration
+        run: |
+          set -o pipefail
+          bash scripts/native-storage-durability.sh 2>&1 | tee .tools/swiftdata-durability.log
       - name: Upload iOS test evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -128,6 +132,7 @@ jobs:
           path: |
             .tools/ios-derived-data/Logs/Test/*.xcresult
             .tools/ios-build-tests.log
+            .tools/swiftdata-durability.log
           if-no-files-found: warn
           retention-days: 14
 
@@ -150,8 +155,9 @@ jobs:
           jobs = json.loads(os.environ['RESULTS'])
           rows = ['## Native Validation', '', '| Job | Result |', '|---|---|']
           rows.extend(f"| {name} | {job['result']} |" for name, job in sorted(jobs.items()))
-          rows.extend(['', 'Scope: native startup, current domain and Room behavior. '
-                       'Full product workflows, SwiftData, real health readings, '
+          rows.extend(['', 'Scope: native startup, domain, current Room/SwiftData persistence, '
+                       'legacy import, backup/deletion and storage recovery. '
+                       'Full product workflows, real health readings, '
                        'signing and store acceptance are not certified by this run.'])
           Path(os.environ['GITHUB_STEP_SUMMARY']).write_text('\n'.join(rows) + '\n')
           failed = [name for name, job in jobs.items() if job['result'] != 'success']

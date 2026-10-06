@@ -55,7 +55,7 @@ public struct HabitDefinition: Sendable {
     }
 }
 
-public enum CreditReason: String, Codable, Sendable { case currentDay, midnightGrace }
+public enum CreditReason: String, Codable, Sendable { case currentDay, midnightGrace, legacyImported }
 public struct DateCredit: Sendable {
     public let date: LocalDay
     public let zoneID: String
