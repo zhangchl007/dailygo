@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextClearance
 import androidx.test.platform.app.InstrumentationRegistry
@@ -104,11 +105,12 @@ class LaunchTest {
         awaitText(context.getString(R.string.completed))
         compose.onNodeWithText(context.getString(R.string.show_history)).performClick()
         compose.onNodeWithTag("history-grid").assertIsDisplayed()
-        compose.onNodeWithContentDescription(context.getString(R.string.completed), substring = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription(context.getString(R.string.completed), substring = true)
+            .performScrollTo().assertIsDisplayed()
         compose.activityRule.scenario.recreate()
         awaitText(edited)
         awaitText(context.getString(R.string.completed))
-        compose.onNodeWithContentDescription(context.getString(R.string.habit_options)).performClick()
+        compose.onNodeWithContentDescription(context.getString(R.string.habit_options)).performScrollTo().performClick()
         compose.onNodeWithText(context.getString(R.string.delete_habit)).performClick()
         compose.onNodeWithTag("confirm-habit-delete").performClick()
         awaitText(context.getString(R.string.no_habits))
