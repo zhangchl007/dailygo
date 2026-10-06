@@ -87,6 +87,35 @@ data class MutationReceiptRow(
 data class DeletedOwnerRow(val ownerId: String)
 
 @Serializable
+@Entity(tableName = "deleted_habits", primaryKeys = ["ownerId", "habitId"])
+data class DeletedHabitRow(val ownerId: String, val habitId: String, val operationId: String, val occurredAtMillis: Long)
+
+@Serializable
+data class RetiredHabitOperation(val ownerId: String, val operationId: String, val habitId: String)
+
+@Serializable
+data class HabitDeleteCommand(
+    val ownerId: String,
+    val operationId: String,
+    val habitId: String,
+    val occurredAtMillis: Long,
+    val asOfMillis: Long = occurredAtMillis,
+)
+
+@Serializable
+data class HabitEditCommand(
+    val ownerId: String,
+    val operationId: String,
+    val habitId: String,
+    val title: String,
+    val scheduleKind: String,
+    val scheduleParameter: Int?,
+    val zoneId: String,
+    val occurredAtMillis: Long,
+    val asOfMillis: Long = occurredAtMillis,
+)
+
+@Serializable
 data class HabitArchiveCommand(
     val ownerId: String,
     val operationId: String,
@@ -107,6 +136,22 @@ data class CompletionCommand(
     val workoutStartedAtMillis: Long? = null,
     val asOfMillis: Long = occurredAtMillis,
 )
+
+@Serializable
+data class CompletionCorrectionCommand(
+    val ownerId: String,
+    val operationId: String,
+    val recordId: String,
+    val active: Boolean,
+    val occurredAtMillis: Long,
+    val asOfMillis: Long = occurredAtMillis,
+)
+
+@Serializable
+@Entity(tableName = "completion_states", primaryKeys = ["ownerId", "recordId"], foreignKeys = [ForeignKey(
+    entity = CheckInRow::class, parentColumns = ["ownerId", "id"], childColumns = ["ownerId", "recordId"], onDelete = ForeignKey.CASCADE,
+)])
+data class CompletionStateRow(val ownerId: String, val recordId: String, val active: Boolean, val operationId: String, val occurredAtMillis: Long)
 
 @Serializable
 data class ProgressCommand(

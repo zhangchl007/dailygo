@@ -36,6 +36,258 @@ class RepositoryTest {
         owner, "walk", "Walk", "daily", null, "completion", null, "Asia/Shanghai", instant, false,
     )
 
+    @Test fun `completion corrections preserve credits and survive retry reopen and backup`() = runBlocking<Unit> {
+        val path = directory.resolve("correction.db").toString()
+        val undo = CompletionCorrectionCommand("guest", "undo", "done", false, instant + 1)
+        val restore = CompletionCorrectionCommand("guest", "restore", "done", true, instant + 2)
+        val original = openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit(), "create")
+            val entry = repository.complete(CompletionCommand("guest", "complete", "done", "walk", instant, null))
+            repository.correctCompletion(undo)
+            assertTrue(repository.completionDates("guest", "walk").isEmpty())
+            assertNull(repository.completionOn("guest", "walk", entry.creditedDate))
+            assertEquals(entry, database.ledger().checkIn("guest", "done"))
+            database.ledger().acknowledge("guest", "undo")
+            repository.correctCompletion(undo)
+            assertFalse(database.ledger().outbox("guest").any { it.eventId == "undo" })
+            entry
+        }
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            assertTrue(repository.completionDates("guest", "walk").isEmpty())
+            val backup = repository.exportOwner("guest")
+            openLocalDatabase(directory.resolve("corrected-restore.db").toString()).use { target ->
+                val restored = LocalRepository(target)
+                restored.importOwner("guest", backup)
+                assertTrue(restored.completionDates("guest", "walk").isEmpty())
+                restored.correctCompletion(restore)
+                restored.correctCompletion(undo)
+                assertEquals(original, restored.completionOn("guest", "walk", original.creditedDate))
+                restored.exportOwner("guest")
+            }
+            repository.correctCompletion(restore)
+            repository.correctCompletion(undo)
+            assertEquals(original, repository.completionOn("guest", "walk", original.creditedDate))
+        }
+    }
+
+    @Test fun `recent history is bounded ordered and owner scoped while streak dates remain complete`() = runBlocking<Unit> {
+        openLocalDatabase(directory.resolve("bounded-history.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit(), "create")
+            repository.saveHabit(habit("other"), "other-create")
+            for (offset in 0L..39L) {
+                val occurred = instant + offset * 86_400_000L
+                repository.complete(CompletionCommand("guest", "op-$offset", "record-$offset", "walk", occurred, null))
+                repository.complete(CompletionCommand("other", "other-$offset", "other-record-$offset", "walk", occurred, null))
+            }
+            val start = java.time.Instant.ofEpochMilli(instant + 5 * 86_400_000L).atZone(java.time.ZoneId.of("Asia/Shanghai")).toLocalDate().toString()
+            val end = java.time.Instant.ofEpochMilli(instant + 39 * 86_400_000L).atZone(java.time.ZoneId.of("Asia/Shanghai")).toLocalDate().toString()
+            val recent = repository.recentCheckIns("guest", "walk", start, end, 14)
+            assertEquals(14, recent.size)
+            assertEquals(recent.sortedByDescending { it.creditedDate }, recent)
+            assertEquals(40, repository.completionDates("guest", "walk").size)
+            assertTrue(recent.all { it.ownerId == "guest" })
+        }
+    }
+
+    @Test fun `correction failure is atomic owner scoped and deletion retires correction receipts`() = runBlocking<Unit> {
+        openLocalDatabase(directory.resolve("correction-failure.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit(), "create")
+            val entry = repository.complete(CompletionCommand("guest", "complete", "done", "walk", instant, null))
+            val undo = CompletionCorrectionCommand("guest", "undo", "done", false, instant + 1)
+            for (invalid in listOf(undo.copy(ownerId = "other"), undo.copy(occurredAtMillis = instant - 1), undo.copy(asOfMillis = instant))) {
+                assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.correctCompletion(invalid) } }
+            }
+            database.ledger().insertOutbox(OutboxRow("guest", "undo", "conflict", "done", "{}", instant))
+            assertThrows(Exception::class.java) { runBlocking { repository.correctCompletion(undo) } }
+            assertNull(database.ledger().completionState("guest", "done"))
+            assertNull(database.ledger().receipt("guest", "undo"))
+            assertEquals(entry, repository.completionOn("guest", "walk", entry.creditedDate))
+            database.ledger().acknowledge("guest", "undo")
+            val oldBackup = repository.exportOwner("guest")
+            repository.correctCompletion(undo)
+            repository.importOwner("guest", oldBackup)
+            assertTrue(repository.completionDates("guest", "walk").isEmpty())
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.correctCompletion(undo.copy(active = true)) } }
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.complete(CompletionCommand("guest", "new", "new", "walk", instant, null)) } }
+            repository.deleteHabit(HabitDeleteCommand("guest", "delete", "walk", instant + 2))
+            assertTrue(database.ledger().completionStates("guest").isEmpty())
+            assertEquals("habit.retired", database.ledger().receipt("guest", "undo")?.kind)
+            repository.exportOwner("guest")
+        }
+    }
+
+    @Test fun `v4 upgrade preserves completion before adding correction state`() = runBlocking<Unit> {
+        val path = directory.resolve("v4-correction.db").toString()
+        val entry = createPriorDatabase(path, Files.readString(Path.of("schemas/com.dailygo.storage.LocalDatabase/4.json")),
+            habit(), CompletionCommand("guest", "complete", "done", "walk", instant, null))
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            assertEquals(entry, repository.completionOn("guest", "walk", entry.creditedDate))
+            repository.correctCompletion(CompletionCorrectionCommand("guest", "undo", "done", false, instant + 1))
+            assertNull(repository.completionOn("guest", "walk", entry.creditedDate))
+            assertEquals(entry, database.ledger().checkIn("guest", "done"))
+        }
+    }
+
+    @Test fun `single habit deletion preserves other namespaces and fences retries and old backups`() = runBlocking<Unit> {
+        val path = directory.resolve("delete-habit.db").toString()
+        val command = HabitDeleteCommand("guest", "delete", "walk", instant + 1)
+        val oldBackup = openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit(), "create")
+            repository.saveHabit(habit("other"), "create")
+            repository.saveHabit(habit().copy(id = "run", title = "Run"), "create-run")
+            repository.complete(CompletionCommand("guest", "complete", "done", "walk", instant, null))
+            repository.complete(CompletionCommand("guest", "complete-run", "walk", "run", instant, null))
+            val backup = repository.exportOwner("guest")
+            repository.deleteHabit(command)
+            repository.deleteHabit(command)
+            assertNull(database.ledger().habit("guest", "walk"))
+            assertTrue(database.ledger().checkIns("guest", "walk").isEmpty())
+            assertEquals("walk", database.ledger().checkIns("guest", "run").single().id)
+            assertEquals(habit("other"), database.ledger().habit("other", "walk"))
+            assertEquals(setOf("create-run", "complete-run", "delete"), database.ledger().outbox("guest").map { it.eventId }.toSet())
+            backup
+        }
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            database.ledger().acknowledge("guest", "delete")
+            repository.deleteHabit(command.copy(asOfMillis = instant + 10))
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.saveHabit(habit(), "create-again") } }
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.importOwner("guest", oldBackup) } }
+            assertFalse(database.ledger().outbox("guest").any { it.eventId == "delete" })
+            val backup = repository.exportOwner("guest")
+            openLocalDatabase(directory.resolve("delete-habit-restored.db").toString()).use { restored ->
+                val target = LocalRepository(restored)
+                val parsed = Json.decodeFromString<BackupArchive>(backup)
+                val dangling = parsed.copy(receipts = parsed.receipts.filter { it.kind != "habit.deleted" })
+                assertThrows(IllegalArgumentException::class.java) {
+                    runBlocking { target.importOwner("guest", Json.encodeToString(BackupArchive.serializer(), dangling)) }
+                }
+                assertTrue(restored.ledger().habits("guest").isEmpty())
+                target.importOwner("guest", backup)
+                target.deleteHabit(command)
+                assertThrows(IllegalArgumentException::class.java) { runBlocking { target.importOwner("guest", oldBackup) } }
+                assertThrows(IllegalArgumentException::class.java) { runBlocking { target.saveHabit(habit(), "new") } }
+                assertEquals("run", restored.ledger().habits("guest").single().id)
+            }
+        }
+    }
+
+    @Test fun `deleted habit operation identifiers cannot be reassigned and retain no old payloads`() = runBlocking<Unit> {
+        openLocalDatabase(directory.resolve("retired-operations.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit(), "create")
+            repository.deleteHabit(HabitDeleteCommand("guest", "delete", "walk", instant + 1))
+            assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { repository.saveHabit(habit().copy(id = "new", title = "New"), "create") }
+            }
+            assertNull(database.ledger().habit("guest", "new"))
+            val receipt = database.ledger().receipt("guest", "create")!!
+            assertEquals("habit.retired", receipt.kind)
+            assertFalse(receipt.request.contains("Asia/Shanghai"))
+            assertFalse(receipt.request.contains("Walk"))
+            val backup = repository.exportOwner("guest")
+            openLocalDatabase(directory.resolve("retired-restored.db").toString()).use { target ->
+                val restored = LocalRepository(target)
+                restored.importOwner("guest", backup)
+                assertThrows(IllegalArgumentException::class.java) {
+                    runBlocking { restored.saveHabit(habit().copy(id = "new", title = "New"), "create") }
+                }
+            }
+        }
+    }
+
+    @Test fun `single habit deletion failure is atomic and rejects invalid clocks and ownership`() = runBlocking<Unit> {
+        openLocalDatabase(directory.resolve("delete-habit-failure.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit(), "create")
+            val entry = repository.complete(CompletionCommand("guest", "complete", "done", "walk", instant, null))
+            val command = HabitDeleteCommand("guest", "delete", "walk", instant + 1)
+            for (invalid in listOf(command.copy(ownerId = "other"), command.copy(occurredAtMillis = instant - 1), command.copy(asOfMillis = instant))) {
+                assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.deleteHabit(invalid) } }
+            }
+            database.ledger().insertOutbox(OutboxRow("guest", "delete", "conflict", "walk", "{}", instant))
+            assertThrows(Exception::class.java) { runBlocking { repository.deleteHabit(command) } }
+            assertEquals(habit(), database.ledger().habit("guest", "walk"))
+            assertEquals(entry, database.ledger().checkIns("guest", "walk").single())
+            assertFalse(database.ledger().isHabitDeleted("guest", "walk"))
+            assertNotNull(database.ledger().receipt("guest", "create"))
+            database.ledger().acknowledge("guest", "delete")
+            repository.deleteHabit(command)
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.deleteHabit(command.copy(habitId = "run")) } }
+        }
+    }
+
+    @Test fun `v3 upgrade preserves history before adding single habit deletion fences`() = runBlocking<Unit> {
+        val path = directory.resolve("v3-delete.db").toString()
+        val record = createPriorDatabase(path, Files.readString(Path.of("schemas/com.dailygo.storage.LocalDatabase/3.json")),
+            habit(), CompletionCommand("guest", "complete", "done", "walk", instant, null))
+        openLocalDatabase(path).use { database ->
+            assertEquals(habit(), database.ledger().habit("guest", "walk"))
+            assertEquals(record, database.ledger().checkIns("guest", "walk").single())
+            LocalRepository(database).deleteHabit(HabitDeleteCommand("guest", "delete", "walk", instant + 1))
+            assertTrue(database.ledger().isHabitDeleted("guest", "walk"))
+        }
+    }
+
+    @Test fun `metadata edits preserve credit and stale retries cannot undo newer edits`() = runBlocking<Unit> {
+        val path = directory.resolve("editing.db").toString()
+        val edit = HabitEditCommand("guest", "edit", "walk", "Evening walk", "weekdays", null, "America/New_York", instant + 1)
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit(), "create")
+            repository.saveHabit(habit("other"), "create")
+            val entry = repository.complete(CompletionCommand("guest", "complete", "done", "walk", instant, null))
+            val updated = repository.editHabit(edit)
+            assertEquals("Evening walk", updated.title)
+            assertEquals("weekdays", updated.scheduleKind)
+            assertEquals("America/New_York", updated.zoneId)
+            assertEquals(entry, database.ledger().checkIns("guest", "walk").single())
+            assertEquals(habit("other"), database.ledger().habit("other", "walk"))
+            repository.editHabit(edit.copy(operationId = "edit-again", title = "Morning walk", occurredAtMillis = instant + 2, asOfMillis = instant + 2))
+            database.ledger().acknowledge("guest", "edit")
+            assertEquals("Morning walk", repository.editHabit(edit.copy(asOfMillis = instant + 10)).title)
+        }
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            assertEquals("Morning walk", repository.editHabit(edit).title)
+            val backup = repository.exportOwner("guest")
+            openLocalDatabase(directory.resolve("editing-restored.db").toString()).use { restored ->
+                val target = LocalRepository(restored)
+                target.importOwner("guest", backup)
+                assertEquals("Morning walk", target.editHabit(edit).title)
+                assertEquals("Asia/Shanghai", restored.ledger().checkIns("guest", "walk").single().zoneId)
+            }
+        }
+    }
+
+    @Test fun `invalid edits and event collisions leave metadata history and receipts unchanged`() = runBlocking<Unit> {
+        openLocalDatabase(directory.resolve("editing-failure.db").toString()).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit(), "create")
+            val edit = HabitEditCommand("guest", "edit", "walk", "Evening walk", "daily", null, "Asia/Shanghai", instant + 1)
+            for (invalid in listOf(edit.copy(title = " "), edit.copy(zoneId = "invalid"),
+                edit.copy(scheduleKind = "weekly", scheduleParameter = 8), edit.copy(ownerId = "other"),
+                edit.copy(occurredAtMillis = instant - 1), edit.copy(asOfMillis = instant))) {
+                assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.editHabit(invalid) } }
+            }
+            database.ledger().insertOutbox(OutboxRow("guest", "edit", "conflict", "walk", "{}", instant))
+            assertThrows(Exception::class.java) { runBlocking { repository.editHabit(edit) } }
+            assertEquals(habit(), database.ledger().habit("guest", "walk"))
+            assertNull(database.ledger().receipt("guest", "edit"))
+            database.ledger().acknowledge("guest", "edit")
+            repository.editHabit(edit)
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.editHabit(edit.copy(title = "Different")) } }
+            repository.deleteOwner("guest")
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.editHabit(edit) } }
+        }
+    }
+
     @Test fun `archival preserves history and retries cannot undo restoration`() = runBlocking<Unit> {
         val path = directory.resolve("archival.db").toString()
         val archive = HabitArchiveCommand("guest", "archive", "walk", true, instant + 1)
@@ -187,7 +439,7 @@ class RepositoryTest {
         openLocalDatabase(directory.resolve("backup-target.db").toString()).use { database ->
             val repository = LocalRepository(database)
             repository.saveHabit(habit().copy(title = "Existing"), "existing")
-            for (invalid in listOf("{", backup.replace("\"version\":1", "\"version\":99"),
+            for (invalid in listOf("{", backup.replace("\"version\":2", "\"version\":99"),
                 backup.replace("\"ownerId\":\"guest\"", "\"ownerId\":\"other\""), backup)) {
                 assertThrows(Exception::class.java) { runBlocking { repository.importOwner("guest", invalid) } }
                 assertEquals(listOf("Existing"), database.ledger().habits("guest").map { it.title })

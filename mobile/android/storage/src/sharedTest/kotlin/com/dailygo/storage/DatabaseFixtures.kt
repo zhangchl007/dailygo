@@ -18,7 +18,7 @@ fun createPriorDatabase(path: String, schemaText: String, habit: HabitRow, comma
     val json = Json { encodeDefaults = true }
     val schema = Json.parseToJsonElement(schemaText).jsonObject.getValue("database").jsonObject
     val version = schema.getValue("version").jsonPrimitive.content.toInt()
-    require(version in 1..2)
+    require(version in 1..4)
     val credit = CalendarPolicy.credit(Instant.ofEpochMilli(command.occurredAtMillis), habit.zoneId)
     val record = CheckInRow(command.ownerId, command.recordId, command.habitId, command.occurredAtMillis,
         credit.date.toString(), credit.zoneId, credit.reason.name, command.value)

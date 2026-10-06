@@ -136,19 +136,22 @@ retains only a minimal anti-resurrection fence. A new local profile needs a new
 owner ID; global account deletion and cross-platform sync remain P6.
 
 Swift record/backup/SQLite3 reader compilation and contract behaviors pass.
-CI also requires `bash scripts/native-storage-durability.sh` on macOS: a
+CI also requires `make native-storage-durability` on macOS: a
 temporary bounded disk image tests real disk-full rollback/retry, backup restore
 and read-only legacy conversion, then is detached and removed. Its execution is
 accepted at `7d6cf0a`. Legacy user files/databases remain untouched.
 
-P5 has started with T015's repository archive/restore slice on both platforms.
-Changes preserve history and commit atomically with events/retry receipts. A retry
-of an old archive operation cannot undo a later restoration or resurrect an
-acknowledged event. Typed backups retain these operations without a schema change.
-Two new Room tests pass; Swift command/backup contracts compile and execute locally.
-The two new SwiftData tests require fresh native CI; the accepted P4 baseline
-contains 11 storage tests, not these additions. Onboarding, persisted UI wiring,
-remaining habit CRUD, goals/schedules and health/device acceptance remain open.
+P5 now has persisted native CRUD/progress screens, streak/history views, opt-in
+reminder settings and completion undo/restore in source on both platforms.
+Corrections retain immutable entry credits and commit state/events/receipts
+atomically; stale retries do not replay an undo after restoration. Room v5 adds
+correction state with preserving migrations; 38 JVM storage tests pass. Both backup
+formats use version 3 for correction state while accepting older supported formats.
+Swift command/backup contracts compile and execute locally, but updated SwiftData,
+Android/iOS UI and reminder behavior still require fresh native CI/device checks.
+Onboarding, numeric value correction, complete settings/accessibility flows,
+large-history performance, real health integrations and release acceptance remain
+open. The accepted P4 revision does not accept these later uncommitted changes.
 
 ## Native App Builds
 

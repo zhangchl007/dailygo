@@ -51,6 +51,101 @@ struct NativeHabit: Codable, Equatable, Sendable {
 
 enum NativeEntryKind: String, Codable, Sendable { case completion, progress }
 
+struct NativeCompletionCorrectionCommand: Codable, Equatable, Sendable {
+    let ownerID: String
+    let operationID: String
+    let recordID: String
+    let active: Bool
+    let occurredAtMillis: Int64
+    var asOfMillis: Int64? = nil
+
+    func request() throws -> Data {
+        var normalized = self
+        normalized.asOfMillis = nil
+        return try NativeStorageEncoding.encode(normalized)
+    }
+
+    func validate() throws {
+        try NativeStorageEncoding.validateIdentity(ownerID, operationID, recordID)
+        guard occurredAtMillis <= (asOfMillis ?? occurredAtMillis) else { throw DomainError.futureDate }
+    }
+}
+
+struct NativeCompletionState: Codable, Equatable, Sendable {
+    let ownerID: String
+    let recordID: String
+    let active: Bool
+    let operationID: String
+    let occurredAtMillis: Int64
+}
+
+struct NativeHabitDeletion: Codable, Equatable, Sendable {
+    let ownerID: String
+    let habitID: String
+    let operationID: String
+    let occurredAtMillis: Int64
+}
+
+struct NativeRetiredHabitOperation: Codable, Equatable, Sendable {
+    let ownerID: String
+    let operationID: String
+    let habitID: String
+}
+
+struct NativeHabitDeleteCommand: Codable, Equatable, Sendable {
+    let ownerID: String
+    let operationID: String
+    let habitID: String
+    let occurredAtMillis: Int64
+    var asOfMillis: Int64? = nil
+
+    func request() throws -> Data {
+        var normalized = self
+        normalized.asOfMillis = nil
+        return try NativeStorageEncoding.encode(normalized)
+    }
+
+    func validate() throws {
+        try NativeStorageEncoding.validateIdentity(ownerID, operationID, habitID)
+        guard occurredAtMillis <= (asOfMillis ?? occurredAtMillis) else { throw DomainError.futureDate }
+    }
+}
+
+struct NativeHabitEditCommand: Codable, Equatable, Sendable {
+    let ownerID: String
+    let operationID: String
+    let habitID: String
+    let title: String
+    let scheduleKind: String
+    let scheduleParameter: Int?
+    let zoneID: String
+    let occurredAtMillis: Int64
+    var asOfMillis: Int64? = nil
+
+    func request() throws -> Data {
+        var normalized = self
+        normalized.asOfMillis = nil
+        return try NativeStorageEncoding.encode(normalized)
+    }
+
+    func validate() throws {
+        try NativeStorageEncoding.validateIdentity(ownerID, operationID, habitID)
+        guard occurredAtMillis <= (asOfMillis ?? occurredAtMillis) else { throw DomainError.futureDate }
+    }
+
+    func applying(to habit: NativeHabit) throws -> NativeHabit {
+        try validate()
+        guard ownerID == habit.ownerID, habitID == habit.id, occurredAtMillis >= habit.createdAtMillis else {
+            throw NativeStorageError.invalidDefinition
+        }
+        let updated = NativeHabit(ownerID: habit.ownerID, id: habit.id, title: title, scheduleKind: scheduleKind,
+            scheduleParameter: scheduleParameter, goalKind: habit.goalKind, target: habit.target,
+            zoneID: zoneID, createdAtMillis: habit.createdAtMillis, archived: habit.archived)
+        _ = try updated.definition()
+        return updated
+    }
+}
+
 struct NativeHabitArchiveCommand: Codable, Equatable, Sendable {
     let ownerID: String
     let operationID: String

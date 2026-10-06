@@ -41,6 +41,267 @@ final class NativeStorageTests: XCTestCase {
         } catch {}
     }
 
+    func testRecentCompletionsAreCalendarBoundedOwnerScopedAndDurable() async throws {
+        let url = try storeURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let lastInstant = instant + 39 * 86_400_000
+        let end = try CalendarPolicy.credit(now: NativeStorageEncoding.date(lastInstant), zoneID: "Asia/Shanghai").date
+        do {
+            let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+            _ = try await repository.saveHabit(habit(), operationID: "create")
+            _ = try await repository.saveHabit(habit(ownerID: "other"), operationID: "create")
+            for offset in 0..<40 {
+                let entry = NativeEntryCommand(ownerID: "guest", operationID: "complete-\(offset)", recordID: "entry-\(offset)",
+                    habitID: "walk", occurredAtMillis: instant + Int64(offset) * 86_400_000,
+                    value: 1000, workoutStartedAtMillis: nil, asOfMillis: lastInstant)
+                _ = try await repository.complete(entry)
+            }
+            _ = try await repository.complete(command(ownerID: "other", value: 1000))
+        }
+        let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+        let history = try await repository.recentCompletions(ownerID: "guest", habitID: "walk", through: end.description)
+        XCTAssertEqual(history.count, 35)
+        XCTAssertEqual(history.first?.creditedDate, try end.adding(days: -34).description)
+        XCTAssertEqual(history.last?.creditedDate, end.description)
+        XCTAssertEqual(history.map(\.id), (5..<40).map { "entry-\($0)" })
+        let all = try await repository.entries(ownerID: "guest", habitID: "walk", kind: .completion)
+        XCTAssertEqual(all.count, 40)
+        let other = try await repository.recentCompletions(ownerID: "other", habitID: "walk", through: end.description)
+        XCTAssertTrue(other.isEmpty)
+        let future = try await repository.recentCompletions(ownerID: "guest", habitID: "walk", through: end.adding(days: 35).description)
+        XCTAssertTrue(future.isEmpty)
+        for limit in [0, 367] {
+            await expectFailure {
+                _ = try await repository.recentCompletions(ownerID: "guest", habitID: "walk", through: end.description, days: limit)
+            }
+        }
+    }
+
+    func testCompletionCorrectionPreservesCreditAcrossRetryReopenAndBackup() async throws {
+        let url = try storeURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let undo = NativeCompletionCorrectionCommand(ownerID: "guest", operationID: "undo", recordID: "done", active: false, occurredAtMillis: instant + 1)
+        let restore = NativeCompletionCorrectionCommand(ownerID: "guest", operationID: "restore", recordID: "done", active: true, occurredAtMillis: instant + 2)
+        let original: NativeEntry
+        do {
+            let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+            _ = try await repository.saveHabit(habit(), operationID: "create")
+            original = try await repository.complete(command(operationID: "complete", recordID: "done", value: 1000))
+            _ = try await repository.correctCompletion(undo)
+            try await repository.acknowledge(ownerID: "guest", eventID: "undo")
+            _ = try await repository.correctCompletion(undo)
+            let history = try await repository.entries(ownerID: "guest", habitID: "walk", kind: .completion)
+            let events = try await repository.events(ownerID: "guest")
+            XCTAssertTrue(history.isEmpty)
+            XCTAssertFalse(events.contains { $0.eventID == "undo" })
+        }
+        let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+        let retained = try await repository.completionRecordOn(ownerID: "guest", habitID: "walk", date: original.creditedDate)
+        let current = try await repository.completionOn(ownerID: "guest", habitID: "walk", date: original.creditedDate)
+        XCTAssertEqual(retained, original)
+        XCTAssertNil(current)
+        let backup = try await repository.exportOwner(ownerID: "guest")
+        let targetURL = try storeURL()
+        defer { try? FileManager.default.removeItem(at: targetURL.deletingLastPathComponent()) }
+        let target = NativeRepository(modelContainer: try NativeStore.open(url: targetURL))
+        try await target.importOwner(ownerID: "guest", contents: backup)
+        let restoredHistory = try await target.entries(ownerID: "guest", habitID: "walk", kind: .completion)
+        XCTAssertTrue(restoredHistory.isEmpty)
+        _ = try await target.correctCompletion(restore)
+        _ = try await target.correctCompletion(undo)
+        let restored = try await target.completionOn(ownerID: "guest", habitID: "walk", date: original.creditedDate)
+        XCTAssertEqual(restored, original)
+        _ = try await target.exportOwner(ownerID: "guest")
+    }
+
+    func testCompletionCorrectionFailureRollsBackAndDeletionRetiresReceipts() async throws {
+        let url = try storeURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let container = try NativeStore.open(url: url)
+        let repository = NativeRepository(modelContainer: container)
+        _ = try await repository.saveHabit(habit(), operationID: "create")
+        let original = try await repository.complete(command(operationID: "complete", recordID: "done", value: 1000))
+        let undo = NativeCompletionCorrectionCommand(ownerID: "guest", operationID: "undo", recordID: "done", active: false, occurredAtMillis: instant + 1)
+        await expectFailure { _ = try await repository.correctCompletion(NativeCompletionCorrectionCommand(ownerID: "other", operationID: "undo", recordID: "done", active: false, occurredAtMillis: self.instant + 1)) }
+        await expectFailure { _ = try await repository.correctCompletion(NativeCompletionCorrectionCommand(ownerID: "guest", operationID: "future", recordID: "done", active: false, occurredAtMillis: self.instant + 1, asOfMillis: self.instant)) }
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let conflict = NativeLedgerRow(key: try NativeStorageEncoding.key("guest", "event", "undo"), ownerID: "guest",
+            category: "event", identifier: "undo", payload: Data("{}".utf8))
+        context.insert(conflict)
+        try NativeIndexes.attach(conflict, context: context)
+        try context.save()
+        await expectFailure { _ = try await repository.correctCompletion(undo) }
+        let active = try await repository.completionOn(ownerID: "guest", habitID: "walk", date: original.creditedDate)
+        let receipt = try await repository.receipt(ownerID: "guest", operationID: "undo")
+        XCTAssertEqual(active, original)
+        XCTAssertNil(receipt)
+        try await repository.acknowledge(ownerID: "guest", eventID: "undo")
+        let oldBackup = try await repository.exportOwner(ownerID: "guest")
+        _ = try await repository.correctCompletion(undo)
+        try await repository.importOwner(ownerID: "guest", contents: oldBackup)
+        let history = try await repository.entries(ownerID: "guest", habitID: "walk", kind: .completion)
+        XCTAssertTrue(history.isEmpty)
+        try await repository.deleteHabit(NativeHabitDeleteCommand(ownerID: "guest", operationID: "delete", habitID: "walk", occurredAtMillis: instant + 2))
+        let retired = try await repository.receipt(ownerID: "guest", operationID: "undo")
+        XCTAssertEqual(retired?.kind, "habit.retired")
+        _ = try await repository.exportOwner(ownerID: "guest")
+    }
+
+    func testSingleHabitDeletionPreservesNamespacesAndFencesRestoration() async throws {
+        let url = try storeURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let deletion = NativeHabitDeleteCommand(ownerID: "guest", operationID: "delete", habitID: "walk", occurredAtMillis: instant + 1)
+        let oldBackup: Data
+        do {
+            let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+            _ = try await repository.saveHabit(habit(), operationID: "create")
+            _ = try await repository.saveHabit(habit(ownerID: "other"), operationID: "create")
+            _ = try await repository.saveHabit(habit(id: "run"), operationID: "create-run")
+            _ = try await repository.complete(command(operationID: "complete", recordID: "done", value: 1000))
+            _ = try await repository.complete(command(operationID: "complete-run", recordID: "walk", habitID: "run", value: 1000))
+            oldBackup = try await repository.exportOwner(ownerID: "guest")
+            try await repository.deleteHabit(deletion)
+            try await repository.deleteHabit(deletion)
+            let habits = try await repository.habits(ownerID: "guest")
+            let history = try await repository.entries(ownerID: "guest", habitID: "walk", kind: .completion)
+            let otherHistory = try await repository.entries(ownerID: "guest", habitID: "run", kind: .completion)
+            let otherOwner = try await repository.habits(ownerID: "other")
+            let events = try await repository.events(ownerID: "guest")
+            XCTAssertEqual(habits.map(\.id), ["run"])
+            XCTAssertTrue(history.isEmpty)
+            XCTAssertEqual(otherHistory[0].id, "walk")
+            XCTAssertEqual(otherOwner, [habit(ownerID: "other")])
+            XCTAssertEqual(Set(events.map(\.eventID)), Set(["create-run", "complete-run", "delete"]))
+        }
+        let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+        try await repository.acknowledge(ownerID: "guest", eventID: "delete")
+        try await repository.deleteHabit(deletion)
+        await expectFailure { _ = try await repository.saveHabit(self.habit(), operationID: "new") }
+        await expectFailure { _ = try await repository.saveHabit(self.habit(id: "fresh"), operationID: "create") }
+        let retired = try await repository.receipt(ownerID: "guest", operationID: "create")
+        XCTAssertEqual(retired?.kind, "habit.retired")
+        XCTAssertFalse(String(data: retired!.request, encoding: .utf8)!.contains("Asia/Shanghai"))
+        XCTAssertFalse(String(data: retired!.request, encoding: .utf8)!.contains("Walk"))
+        await expectFailure { try await repository.importOwner(ownerID: "guest", contents: oldBackup) }
+        let targetURL = try storeURL()
+        defer { try? FileManager.default.removeItem(at: targetURL.deletingLastPathComponent()) }
+        let target = NativeRepository(modelContainer: try NativeStore.open(url: targetURL))
+        let backup = try await repository.exportOwner(ownerID: "guest")
+        try await target.importOwner(ownerID: "guest", contents: backup)
+        try await target.deleteHabit(deletion)
+        await expectFailure { try await target.importOwner(ownerID: "guest", contents: oldBackup) }
+        await expectFailure { _ = try await target.saveHabit(self.habit(), operationID: "new") }
+        let events = try await target.events(ownerID: "guest")
+        XCTAssertFalse(events.contains { $0.eventID == "delete" })
+    }
+
+    func testSingleHabitDeletionFailurePreservesHistoryAndRetryState() async throws {
+        let url = try storeURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let container = try NativeStore.open(url: url)
+        let repository = NativeRepository(modelContainer: container)
+        _ = try await repository.saveHabit(habit(), operationID: "create")
+        let entry = try await repository.complete(command(operationID: "complete", recordID: "done", value: 1000))
+        let deletion = NativeHabitDeleteCommand(ownerID: "guest", operationID: "delete", habitID: "walk", occurredAtMillis: instant + 1)
+        for invalid in [
+            NativeHabitDeleteCommand(ownerID: "other", operationID: "delete", habitID: "walk", occurredAtMillis: instant + 1),
+            NativeHabitDeleteCommand(ownerID: "guest", operationID: "delete", habitID: "walk", occurredAtMillis: instant - 1),
+            NativeHabitDeleteCommand(ownerID: "guest", operationID: "delete", habitID: "walk", occurredAtMillis: instant + 1, asOfMillis: instant),
+        ] { await expectFailure { try await repository.deleteHabit(invalid) } }
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let conflict = NativeLedgerRow(key: try NativeStorageEncoding.key("guest", "event", "delete"), ownerID: "guest",
+            category: "event", identifier: "delete", payload: Data("{}".utf8))
+        context.insert(conflict)
+        try NativeIndexes.attach(conflict, context: context)
+        try context.save()
+        await expectFailure { try await repository.deleteHabit(deletion) }
+        let unchanged = try await repository.habits(ownerID: "guest")
+        let history = try await repository.entries(ownerID: "guest", habitID: "walk", kind: .completion)
+        let createReceipt = try await repository.receipt(ownerID: "guest", operationID: "create")
+        let deleteReceipt = try await repository.receipt(ownerID: "guest", operationID: "delete")
+        XCTAssertEqual(unchanged, [habit()])
+        XCTAssertEqual(history, [entry])
+        XCTAssertNotNil(createReceipt)
+        XCTAssertNil(deleteReceipt)
+        try await repository.acknowledge(ownerID: "guest", eventID: "delete")
+        try await repository.deleteHabit(deletion)
+        try await repository.deleteOwner(ownerID: "guest")
+        await expectFailure { try await repository.deleteHabit(deletion) }
+    }
+
+    func testMetadataEditsPreserveCreditAndStaleRetriesCannotUndoNewerEdits() async throws {
+        let url = try storeURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let edit = NativeHabitEditCommand(ownerID: "guest", operationID: "edit", habitID: "walk", title: "Evening walk",
+            scheduleKind: "weekdays", scheduleParameter: nil, zoneID: "America/New_York", occurredAtMillis: instant + 1)
+        do {
+            let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+            _ = try await repository.saveHabit(habit(), operationID: "create")
+            _ = try await repository.saveHabit(habit(ownerID: "other"), operationID: "create")
+            let entry = try await repository.complete(command(operationID: "complete", recordID: "done", value: 1000))
+            let updated = try await repository.editHabit(edit)
+            XCTAssertEqual(updated.title, "Evening walk")
+            XCTAssertEqual(updated.scheduleKind, "weekdays")
+            XCTAssertEqual(updated.zoneID, "America/New_York")
+            let history = try await repository.entries(ownerID: "guest", habitID: "walk", kind: .completion)
+            XCTAssertEqual(history, [entry])
+            let other = try await repository.habits(ownerID: "other")
+            XCTAssertEqual(other, [habit(ownerID: "other")])
+            _ = try await repository.editHabit(NativeHabitEditCommand(ownerID: "guest", operationID: "edit-again", habitID: "walk",
+                title: "Morning walk", scheduleKind: "daily", scheduleParameter: nil, zoneID: "Asia/Shanghai", occurredAtMillis: instant + 2))
+            try await repository.acknowledge(ownerID: "guest", eventID: "edit")
+            let retry = try await repository.editHabit(edit)
+            XCTAssertEqual(retry.title, "Morning walk")
+        }
+        let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+        let retry = try await repository.editHabit(edit)
+        XCTAssertEqual(retry.title, "Morning walk")
+        let targetURL = try storeURL()
+        defer { try? FileManager.default.removeItem(at: targetURL.deletingLastPathComponent()) }
+        let target = NativeRepository(modelContainer: try NativeStore.open(url: targetURL))
+        try await target.importOwner(ownerID: "guest", contents: repository.exportOwner(ownerID: "guest"))
+        let restoredRetry = try await target.editHabit(edit)
+        let history = try await target.entries(ownerID: "guest", habitID: "walk", kind: .completion)
+        XCTAssertEqual(restoredRetry.title, "Morning walk")
+        XCTAssertEqual(history[0].zoneID, "Asia/Shanghai")
+    }
+
+    func testInvalidMetadataEditsAndEventCollisionsLeaveStateUnchanged() async throws {
+        let url = try storeURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let container = try NativeStore.open(url: url)
+        let repository = NativeRepository(modelContainer: container)
+        _ = try await repository.saveHabit(habit(), operationID: "create")
+        let edit = NativeHabitEditCommand(ownerID: "guest", operationID: "edit", habitID: "walk", title: "Evening walk",
+            scheduleKind: "daily", scheduleParameter: nil, zoneID: "Asia/Shanghai", occurredAtMillis: instant + 1)
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let conflict = NativeLedgerRow(key: try NativeStorageEncoding.key("guest", "event", "edit"), ownerID: "guest",
+            category: "event", identifier: "edit", payload: Data("{}".utf8))
+        context.insert(conflict)
+        try NativeIndexes.attach(conflict, context: context)
+        try context.save()
+        await expectFailure { _ = try await repository.editHabit(edit) }
+        let unchanged = try await repository.habits(ownerID: "guest")
+        let receipt = try await repository.receipt(ownerID: "guest", operationID: "edit")
+        XCTAssertEqual(unchanged, [habit()])
+        XCTAssertNil(receipt)
+        try await repository.acknowledge(ownerID: "guest", eventID: "edit")
+        await expectFailure {
+            _ = try await repository.editHabit(NativeHabitEditCommand(ownerID: "guest", operationID: "invalid", habitID: "walk",
+                title: " ", scheduleKind: "daily", scheduleParameter: nil, zoneID: "Asia/Shanghai", occurredAtMillis: self.instant + 1))
+        }
+        _ = try await repository.editHabit(edit)
+        await expectFailure {
+            _ = try await repository.editHabit(NativeHabitEditCommand(ownerID: "guest", operationID: "edit", habitID: "walk",
+                title: "Different", scheduleKind: "daily", scheduleParameter: nil, zoneID: "Asia/Shanghai", occurredAtMillis: self.instant + 1))
+        }
+        try await repository.deleteOwner(ownerID: "guest")
+        await expectFailure { _ = try await repository.editHabit(edit) }
+    }
+
     func testArchivalPreservesHistoryAndRetryCannotUndoRestoration() async throws {
         let url = try storeURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
