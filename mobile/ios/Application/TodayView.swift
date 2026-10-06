@@ -272,9 +272,13 @@ private struct NativeSettingsView: View {
         guard !updating else { return }
         updating = true
         let center = UNUserNotificationCenter.current()
-        let settings = await center.notificationSettings()
-        notificationsDenied = settings.authorizationStatus == .denied
-        if settings.authorizationStatus == .denied || settings.authorizationStatus == .notDetermined {
+        let authorization: UNAuthorizationStatus = await withCheckedContinuation { continuation in
+            center.getNotificationSettings { settings in
+                continuation.resume(returning: settings.authorizationStatus)
+            }
+        }
+        notificationsDenied = authorization == .denied
+        if authorization == .denied || authorization == .notDetermined {
             center.removePendingNotificationRequests(withIdentifiers: ["dailygo-reminder"])
             remindersEnabled = false
         }

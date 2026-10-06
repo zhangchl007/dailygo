@@ -1,4 +1,5 @@
 import Foundation
+import DailyGoDomain
 import SwiftData
 import SQLite3
 import XCTest
