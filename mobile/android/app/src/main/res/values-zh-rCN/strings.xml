@@ -9,6 +9,7 @@
     <string name="edit_habit">编辑习惯</string>
     <string name="edit_goal">编辑目标</string>
     <string name="goal_history_error">已有历史记录的目标暂时无法更改。</string>
+    <string name="schedule_history_error">已有历史记录的计划暂时无法更改。</string>
     <string name="title">名称</string>
     <string name="schedule">计划</string>
     <string name="daily">每天</string>

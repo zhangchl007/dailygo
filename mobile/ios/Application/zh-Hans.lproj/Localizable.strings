@@ -6,6 +6,7 @@
 "Edit habit" = "编辑习惯";
 "Edit goal" = "编辑目标";
 "Goals with recorded history cannot be changed yet." = "已有历史记录的目标暂时无法更改。";
+"Schedules with recorded history cannot be changed yet." = "已有历史记录的计划暂时无法更改。";
 "Restore" = "恢复";
 "Archive" = "归档";
 "Delete habit" = "删除习惯";

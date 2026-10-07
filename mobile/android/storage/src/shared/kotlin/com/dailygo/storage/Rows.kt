@@ -118,6 +118,7 @@ data class HabitEditCommand(
 )
 
 class HabitGoalHistoryException : IllegalArgumentException("Goal changes require a habit without history")
+class HabitScheduleHistoryException : IllegalArgumentException("Schedule changes require a habit without history")
 
 @Serializable
 data class HabitGoalCommand(

@@ -205,6 +205,8 @@ class LocalRepository(private val database: LocalDatabase) {
                 }
                 val habit = requireNotNull(ledger.habit(command.ownerId, command.habitId)) { "Habit not found" }
                 require(command.occurredAtMillis >= habit.createdAtMillis) { "Change precedes habit creation" }
+                val changesSchedule = habit.scheduleKind != command.scheduleKind || habit.scheduleParameter != command.scheduleParameter
+                if (changesSchedule && ledger.hasHabitHistory(command.ownerId, command.habitId)) throw HabitScheduleHistoryException()
                 val updated = habit.copy(title = command.title, scheduleKind = command.scheduleKind,
                     scheduleParameter = command.scheduleParameter, zoneId = command.zoneId)
                 updated.definition()

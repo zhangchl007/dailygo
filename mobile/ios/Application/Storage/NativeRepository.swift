@@ -182,7 +182,12 @@ actor NativeRepository {
                 return try decode(NativeHabit.self, result)
             }
             guard let record = try row(ownerID: command.ownerID, category: "habit", keyID: command.habitID) else { throw NativeStorageError.missingHabit }
-            let updated = try command.applying(to: decode(NativeHabit.self, record))
+            let habit = try decode(NativeHabit.self, record)
+            let updated = try command.applying(to: habit)
+            if (habit.scheduleKind != updated.scheduleKind || habit.scheduleParameter != updated.scheduleParameter),
+               try hasHabitHistory(ownerID: command.ownerID, habitID: command.habitID) {
+                throw NativeStorageError.scheduleHasHistory
+            }
             record.payload = try NativeStorageEncoding.encode(updated)
             try appendEvent(NativeEvent(ownerID: command.ownerID, eventID: command.operationID, kind: "habit.edited",
                 entityID: command.habitID, payload: request, createdAtMillis: command.occurredAtMillis))
@@ -203,15 +208,7 @@ actor NativeRepository {
                 return try decode(NativeHabit.self, result)
             }
             guard let record = try row(ownerID: command.ownerID, category: "habit", keyID: command.habitID) else { throw NativeStorageError.missingHabit }
-            for category in ["completion", "progress"] {
-                let ownerID = command.ownerID
-                let scopeKey = try NativeStorageEncoding.key(ownerID, category, command.habitID)
-                var descriptor = FetchDescriptor<NativeLedgerRow>(predicate: #Predicate {
-                    $0.ownerID == ownerID && $0.category == category && $0.habitScope?.key == scopeKey
-                })
-                descriptor.fetchLimit = 1
-                guard try ledgerContext.fetch(descriptor).isEmpty else { throw NativeStorageError.goalHasHistory }
-            }
+            if try hasHabitHistory(ownerID: command.ownerID, habitID: command.habitID) { throw NativeStorageError.goalHasHistory }
             let updated = try command.applying(to: decode(NativeHabit.self, record))
             record.payload = try NativeStorageEncoding.encode(updated)
             try appendEvent(NativeEvent(ownerID: command.ownerID, eventID: command.operationID, kind: "habit.goal_changed",
@@ -220,6 +217,18 @@ actor NativeRepository {
                 request: request, resultID: command.habitID, resultKey: command.habitID))
             return updated
         }
+    }
+
+    private func hasHabitHistory(ownerID: String, habitID: String) throws -> Bool {
+        for category in ["completion", "progress"] {
+            let scopeKey = try NativeStorageEncoding.key(ownerID, category, habitID)
+            var descriptor = FetchDescriptor<NativeLedgerRow>(predicate: #Predicate {
+                $0.ownerID == ownerID && $0.category == category && $0.habitScope?.key == scopeKey
+            })
+            descriptor.fetchLimit = 1
+            if try !ledgerContext.fetch(descriptor).isEmpty { return true }
+        }
+        return false
     }
 
     func setHabitArchived(_ command: NativeHabitArchiveCommand) throws -> NativeHabit {

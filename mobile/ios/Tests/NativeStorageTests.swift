@@ -312,6 +312,66 @@ final class NativeStorageTests: XCTestCase {
         await expectFailure { try await repository.deleteHabit(deletion) }
     }
 
+    func testScheduleChangesCannotReinterpretHistoryAndPreserveMetadataRetries() async throws {
+        let url = try storeURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let schedule = NativeHabitEditCommand(ownerID: "guest", operationID: "schedule", habitID: "walk", title: "Walk",
+            scheduleKind: "weekly", scheduleParameter: 3, zoneID: "Asia/Shanghai", occurredAtMillis: instant + 1)
+        do {
+            let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+            _ = try await repository.saveHabit(habit(), operationID: "create")
+            _ = try await repository.saveHabit(habit(ownerID: "other"), operationID: "create")
+            _ = try await repository.complete(command(ownerID: "other", operationID: "complete", recordID: "done", value: 1000))
+            let scheduled = try await repository.editHabit(schedule)
+            XCTAssertEqual(scheduled.scheduleKind, "weekly")
+            XCTAssertEqual(scheduled.scheduleParameter, 3)
+            let entry = try await repository.complete(command(operationID: "complete", recordID: "done", value: 1000))
+            _ = try await repository.correctCompletion(NativeCompletionCorrectionCommand(ownerID: "guest", operationID: "undo",
+                recordID: "done", active: false, occurredAtMillis: instant + 3))
+            let before = try await repository.exportOwner(ownerID: "guest")
+            for blocked in [
+                NativeHabitEditCommand(ownerID: "guest", operationID: "target-change", habitID: "walk", title: "Walk",
+                    scheduleKind: "weekly", scheduleParameter: 4, zoneID: "Asia/Shanghai", occurredAtMillis: instant + 4),
+                NativeHabitEditCommand(ownerID: "guest", operationID: "kind-change", habitID: "walk", title: "Walk",
+                    scheduleKind: "daily", scheduleParameter: nil, zoneID: "Asia/Shanghai", occurredAtMillis: instant + 4)
+            ] {
+                do {
+                    _ = try await repository.editHabit(blocked)
+                    XCTFail("History must prevent schedule changes")
+                } catch { XCTAssertEqual(error as? NativeStorageError, .scheduleHasHistory) }
+                let after = try await repository.exportOwner(ownerID: "guest")
+                let receipt = try await repository.receipt(ownerID: "guest", operationID: blocked.operationID)
+                XCTAssertEqual(after, before)
+                XCTAssertNil(receipt)
+            }
+            let updated = try await repository.editHabit(NativeHabitEditCommand(ownerID: "guest", operationID: "metadata", habitID: "walk",
+                title: "Evening walk", scheduleKind: "weekly", scheduleParameter: 3, zoneID: "America/New_York", occurredAtMillis: instant + 4))
+            XCTAssertEqual(updated.title, "Evening walk")
+            let history = try await repository.entries(ownerID: "guest", habitID: "walk", kind: .completion)
+            let original = try await repository.completionRecordOn(ownerID: "guest", habitID: "walk", date: entry.creditedDate)
+            XCTAssertTrue(history.isEmpty)
+            XCTAssertEqual(original, entry)
+            try await repository.acknowledge(ownerID: "guest", eventID: "schedule")
+            let retry = try await repository.editHabit(schedule)
+            XCTAssertEqual(retry, updated)
+            _ = try await repository.saveHabit(habit(id: "partial"), operationID: "create-partial")
+            _ = try await repository.recordProgress(command(operationID: "partial-progress", recordID: "partial-entry", habitID: "partial"))
+            let partialBefore = try await repository.exportOwner(ownerID: "guest")
+            do {
+                _ = try await repository.editHabit(NativeHabitEditCommand(ownerID: "guest", operationID: "partial-schedule", habitID: "partial",
+                    title: "Walk", scheduleKind: "weekly", scheduleParameter: 3, zoneID: "Asia/Shanghai", occurredAtMillis: instant + 1))
+                XCTFail("Partial progress must prevent schedule changes")
+            } catch { XCTAssertEqual(error as? NativeStorageError, .scheduleHasHistory) }
+            let partialAfter = try await repository.exportOwner(ownerID: "guest")
+            XCTAssertEqual(partialAfter, partialBefore)
+        }
+        let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+        let retry = try await repository.editHabit(schedule)
+        let events = try await repository.events(ownerID: "guest")
+        XCTAssertEqual(retry.title, "Evening walk")
+        XCTAssertFalse(events.contains { $0.eventID == "schedule" })
+    }
+
     func testMetadataEditsPreserveCreditAndStaleRetriesCannotUndoNewerEdits() async throws {
         let url = try storeURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
@@ -321,6 +381,8 @@ final class NativeStorageTests: XCTestCase {
             let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
             _ = try await repository.saveHabit(habit(), operationID: "create")
             _ = try await repository.saveHabit(habit(ownerID: "other"), operationID: "create")
+            _ = try await repository.editHabit(NativeHabitEditCommand(ownerID: "guest", operationID: "schedule-before-history", habitID: "walk",
+                title: "Walk", scheduleKind: "weekdays", scheduleParameter: nil, zoneID: "Asia/Shanghai", occurredAtMillis: instant + 1))
             let entry = try await repository.complete(command(operationID: "complete", recordID: "done", value: 1000))
             let updated = try await repository.editHabit(edit)
             XCTAssertEqual(updated.title, "Evening walk")
@@ -331,7 +393,7 @@ final class NativeStorageTests: XCTestCase {
             let other = try await repository.habits(ownerID: "other")
             XCTAssertEqual(other, [habit(ownerID: "other")])
             _ = try await repository.editHabit(NativeHabitEditCommand(ownerID: "guest", operationID: "edit-again", habitID: "walk",
-                title: "Morning walk", scheduleKind: "daily", scheduleParameter: nil, zoneID: "Asia/Shanghai", occurredAtMillis: instant + 2))
+                title: "Morning walk", scheduleKind: "weekdays", scheduleParameter: nil, zoneID: "Asia/Shanghai", occurredAtMillis: instant + 2))
             try await repository.acknowledge(ownerID: "guest", eventID: "edit")
             let retry = try await repository.editHabit(edit)
             XCTAssertEqual(retry.title, "Morning walk")

@@ -4,6 +4,7 @@ import DailyGoDomain
 enum NativeStorageError: Error, Equatable {
     case invalidIdentity, invalidDefinition, missingHabit, operationConflict, duplicateEntity, missingResult, deletedOwner, invalidStore
     case goalHasHistory
+    case scheduleHasHistory
 }
 
 struct NativeHabit: Codable, Equatable, Sendable {

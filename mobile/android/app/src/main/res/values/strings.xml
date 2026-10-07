@@ -9,6 +9,7 @@
     <string name="edit_habit">Edit habit</string>
     <string name="edit_goal">Edit goal</string>
     <string name="goal_history_error">Goals with recorded history cannot be changed yet.</string>
+    <string name="schedule_history_error">Schedules with recorded history cannot be changed yet.</string>
     <string name="title">Title</string>
     <string name="schedule">Schedule</string>
     <string name="daily">Daily</string>

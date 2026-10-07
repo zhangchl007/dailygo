@@ -368,6 +368,51 @@ class RepositoryTest {
         }
     }
 
+    @Test fun `schedule changes cannot reinterpret recorded history and preserve metadata retries`() = runBlocking<Unit> {
+        val path = directory.resolve("schedule-history.db").toString()
+        val schedule = HabitEditCommand("guest", "schedule", "walk", "Walk", "weekly", 3, "Asia/Shanghai", instant + 1)
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            repository.saveHabit(habit(), "create")
+            repository.saveHabit(habit("other"), "create")
+            repository.complete(CompletionCommand("other", "complete", "done", "walk", instant, null))
+            val scheduled = repository.editHabit(schedule)
+            assertEquals("weekly", scheduled.scheduleKind)
+            assertEquals(3, scheduled.scheduleParameter)
+            val entry = repository.complete(CompletionCommand("guest", "complete", "done", "walk", instant + 2, null))
+            repository.correctCompletion(CompletionCorrectionCommand("guest", "undo", "done", false, instant + 3))
+            val before = repository.exportOwner("guest")
+            for (blocked in listOf(
+                schedule.copy(operationId = "target-change", scheduleParameter = 4, occurredAtMillis = instant + 4, asOfMillis = instant + 4),
+                schedule.copy(operationId = "kind-change", scheduleKind = "daily", scheduleParameter = null, occurredAtMillis = instant + 4, asOfMillis = instant + 4),
+            )) {
+                assertThrows(HabitScheduleHistoryException::class.java) { runBlocking { repository.editHabit(blocked) } }
+                assertEquals(before, repository.exportOwner("guest"))
+                assertNull(database.ledger().receipt("guest", blocked.operationId))
+            }
+            val metadata = schedule.copy(operationId = "metadata", title = "Evening walk", zoneId = "America/New_York",
+                occurredAtMillis = instant + 4, asOfMillis = instant + 4)
+            val updated = repository.editHabit(metadata)
+            assertEquals("Evening walk", updated.title)
+            assertEquals(entry, database.ledger().checkIns("guest", "walk").single())
+            database.ledger().acknowledge("guest", "schedule")
+            assertEquals(updated, repository.editHabit(schedule))
+            assertFalse(database.ledger().outbox("guest").any { it.eventId == "schedule" })
+            repository.saveHabit(habit().copy(id = "partial", goalKind = "steps", target = 1000.0), "create-partial")
+            repository.recordProgress(ProgressCommand("guest", "partial", "progress", "partial", instant, 400.0))
+            val partialBefore = repository.exportOwner("guest")
+            assertThrows(HabitScheduleHistoryException::class.java) { runBlocking {
+                repository.editHabit(schedule.copy(operationId = "partial-schedule", habitId = "partial"))
+            } }
+            assertEquals(partialBefore, repository.exportOwner("guest"))
+        }
+        openLocalDatabase(path).use { database ->
+            val repository = LocalRepository(database)
+            assertEquals("Evening walk", repository.editHabit(schedule).title)
+            assertFalse(database.ledger().outbox("guest").any { it.eventId == "schedule" })
+        }
+    }
+
     @Test fun `metadata edits preserve credit and stale retries cannot undo newer edits`() = runBlocking<Unit> {
         val path = directory.resolve("editing.db").toString()
         val edit = HabitEditCommand("guest", "edit", "walk", "Evening walk", "weekdays", null, "America/New_York", instant + 1)
@@ -375,6 +420,7 @@ class RepositoryTest {
             val repository = LocalRepository(database)
             repository.saveHabit(habit(), "create")
             repository.saveHabit(habit("other"), "create")
+            repository.editHabit(edit.copy(operationId = "schedule-before-history", title = habit().title, zoneId = habit().zoneId))
             val entry = repository.complete(CompletionCommand("guest", "complete", "done", "walk", instant, null))
             val updated = repository.editHabit(edit)
             assertEquals("Evening walk", updated.title)

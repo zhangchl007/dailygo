@@ -89,6 +89,8 @@ final class NativeHabitModel: ObservableObject {
             try await operation(repository)
         } catch NativeStorageError.goalHasHistory {
             errorMessage = "Goals with recorded history cannot be changed yet."
+        } catch NativeStorageError.scheduleHasHistory {
+            errorMessage = "Schedules with recorded history cannot be changed yet."
             return false
         } catch {
             errorMessage = error is DomainError || error as? NativeStorageError == .invalidDefinition

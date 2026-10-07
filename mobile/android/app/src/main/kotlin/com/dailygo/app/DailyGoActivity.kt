@@ -120,6 +120,7 @@ class NativeHabitModel(application: Application, private val repository: LocalRe
                 catch (_: Exception) { state.value = state.value.copy(error = R.string.load_error) }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: HabitGoalHistoryException) { state.value = state.value.copy(error = R.string.goal_history_error) }
+            catch (_: HabitScheduleHistoryException) { state.value = state.value.copy(error = R.string.schedule_history_error) }
             catch (_: IllegalArgumentException) { state.value = state.value.copy(error = R.string.validation_error) }
             catch (_: Exception) { state.value = state.value.copy(error = R.string.storage_error) }
             finally { state.value = state.value.copy(saving = false) }
