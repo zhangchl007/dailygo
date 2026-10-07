@@ -1,8 +1,12 @@
-.PHONY: native-test native-kotlin-test native-swift-test
-.PHONY: native-storage-test
+.PHONY: all test native-test native-kotlin-test native-swift-test
+.PHONY: native-storage-test native-storage-durability
 .PHONY: native-project-check native-android-dependencies native-android-build native-android-ui-test native-ios-test
 
-.DEFAULT_GOAL := native-test
+.DEFAULT_GOAL := test
+
+all: test
+
+test: native-test native-project-check
 
 native-test: native-kotlin-test native-swift-test native-storage-test
 
@@ -14,6 +18,9 @@ native-swift-test:
 
 native-storage-test:
 	bash scripts/gradle.sh :storage:test --dependency-verification strict
+
+native-storage-durability:
+	bash scripts/native-storage-durability.sh
 
 native-project-check:
 	bash scripts/swift.sh scripts/check-native-projects.swift
