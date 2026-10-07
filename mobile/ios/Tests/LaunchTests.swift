@@ -60,7 +60,7 @@ final class LaunchTests: XCTestCase {
 
     private func replaceNumericText(_ field: XCUIElement, with value: String) {
         let current = field.value as? String ?? ""
-        field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        field.tap()
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count) + value)
     }
 

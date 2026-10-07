@@ -17,6 +17,9 @@ import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodes
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -49,7 +52,14 @@ class LaunchTest {
     )
 
     private fun awaitText(value: String) {
-        compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodesWithText(value).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(timeoutMillis = 10_000) {
+            compose.onAllNodes(hasText(value) and SemanticsMatcher.keyNotDefined(SemanticsProperties.EditableText))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    private fun awaitGoalEditorClosed() {
+        compose.waitUntil(timeoutMillis = 10_000) { compose.onAllNodesWithTag("habit-target").fetchSemanticsNodes().isEmpty() }
     }
 
     @Test
@@ -146,6 +156,7 @@ class LaunchTest {
         compose.onNodeWithText(context.getString(R.string.edit_goal)).performClick()
         compose.onNodeWithTag("habit-target").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("1000.0")))
         compose.onNodeWithText(context.getString(R.string.cancel)).performClick()
+        awaitGoalEditorClosed()
         compose.onNodeWithText(context.getString(R.string.record_progress)).performClick()
         compose.onNodeWithText(context.getString(R.string.manual_value)).performTextInput("100")
         compose.onNodeWithText(context.getString(R.string.save)).performClick()
@@ -159,6 +170,7 @@ class LaunchTest {
         compose.onNodeWithText(context.getString(R.string.save)).performClick()
         awaitText(context.getString(R.string.goal_history_error))
         compose.onNodeWithText(context.getString(R.string.cancel)).performClick()
+        awaitGoalEditorClosed()
         compose.activityRule.scenario.recreate()
         awaitText(title)
         compose.onNodeWithContentDescription(context.getString(R.string.habit_options)).performClick()

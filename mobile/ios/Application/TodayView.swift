@@ -426,7 +426,6 @@ private struct NativeHabitEditor: View {
                 }
                 if let error = model.errorMessage { Text(LocalizedStringKey(error)).foregroundStyle(.red) }
             }
-            .disabled(model.saving)
             .navigationTitle(goalOnly ? "Edit goal" : existing == nil ? "Add habit" : "Edit habit")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(model.saving) }
