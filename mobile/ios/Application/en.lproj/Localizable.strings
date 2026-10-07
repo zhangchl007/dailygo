@@ -5,6 +5,8 @@
 "Retry" = "Retry";
 "Edit habit" = "Edit habit";
 "Edit goal" = "Edit goal";
+"Clear title" = "Clear title";
+"Clear target" = "Clear target";
 "Goals with recorded history cannot be changed yet." = "Goals with recorded history cannot be changed yet.";
 "Schedules with recorded history cannot be changed yet." = "Schedules with recorded history cannot be changed yet.";
 "Restore" = "Restore";

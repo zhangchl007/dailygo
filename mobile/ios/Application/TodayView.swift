@@ -384,6 +384,8 @@ private struct NativeHabitEditor: View {
     @State private var id: String
     @State private var operationID = UUID().uuidString
     @State private var occurred: Int64
+    private enum EditorField: Hashable { case title, target }
+    @FocusState private var focusedField: EditorField?
 
     init(model: NativeHabitModel, existing: NativeHabit?, goalOnly: Bool = false) {
         self.model = model
@@ -403,7 +405,15 @@ private struct NativeHabitEditor: View {
         NavigationStack {
             Form {
                 if !goalOnly {
-                    TextField("Title", text: $title).accessibilityIdentifier("habit-title")
+                    HStack {
+                        TextField("Title", text: $title).focused($focusedField, equals: .title)
+                            .accessibilityIdentifier("habit-title")
+                        if !title.isEmpty {
+                            Button { title = ""; focusedField = .title } label: { Image(systemName: "xmark.circle.fill").frame(width: 44, height: 44) }
+                                .buttonStyle(.borderless).accessibilityLabel("Clear title")
+                                .accessibilityIdentifier("clear-habit-title").disabled(model.saving)
+                        }
+                    }
                     Picker("Schedule", selection: $schedule) {
                         Text("Daily").tag("daily")
                         Text("Weekdays").tag("weekdays")
@@ -423,11 +433,19 @@ private struct NativeHabitEditor: View {
                     .accessibilityIdentifier("habit-goal")
                 }
                 if goal != "completion" {
-                    TextField("Target", text: $target).keyboardType(.decimalPad)
-                        .disabled(existing != nil && !goalOnly).accessibilityIdentifier("habit-target")
+                    HStack {
+                        TextField("Target", text: $target).keyboardType(.decimalPad).focused($focusedField, equals: .target)
+                            .disabled(existing != nil && !goalOnly).accessibilityIdentifier("habit-target")
+                        if !target.isEmpty && (existing == nil || goalOnly) {
+                            Button { target = ""; focusedField = .target } label: { Image(systemName: "xmark.circle.fill").frame(width: 44, height: 44) }
+                                .buttonStyle(.borderless).accessibilityLabel("Clear target")
+                                .accessibilityIdentifier("clear-habit-target").disabled(model.saving)
+                        }
+                    }
                 }
                 if let error = model.errorMessage { Text(LocalizedStringKey(error)).foregroundStyle(.red) }
             }
+            .accessibilityIdentifier("habit-editor")
             .navigationTitle(goalOnly ? "Edit goal" : existing == nil ? "Add habit" : "Edit habit")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(model.saving) }

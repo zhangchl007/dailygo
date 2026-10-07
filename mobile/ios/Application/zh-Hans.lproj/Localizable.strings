@@ -5,6 +5,8 @@
 "Retry" = "重试";
 "Edit habit" = "编辑习惯";
 "Edit goal" = "编辑目标";
+"Clear title" = "清空标题";
+"Clear target" = "清空目标值";
 "Goals with recorded history cannot be changed yet." = "已有历史记录的目标暂时无法更改。";
 "Schedules with recorded history cannot be changed yet." = "已有历史记录的计划暂时无法更改。";
 "Restore" = "恢复";
