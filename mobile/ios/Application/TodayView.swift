@@ -19,7 +19,8 @@ final class NativeHabitModel: ObservableObject {
     private let now: () -> Date
     private var storeName = "dailygo-native.store"
 
-    init(now: (() -> Date)? = nil) {
+    init(now: (() -> Date)? = nil, repository: NativeRepository? = nil) {
+        self.repository = repository
         #if DEBUG
         if let value = ProcessInfo.processInfo.environment["DAILYGO_UI_TEST_STORE"], let identifier = UUID(uuidString: value) {
             storeName = "ui-\(identifier.uuidString).store"
@@ -89,6 +90,7 @@ final class NativeHabitModel: ObservableObject {
             try await operation(repository)
         } catch NativeStorageError.goalHasHistory {
             errorMessage = "Goals with recorded history cannot be changed yet."
+            return false
         } catch NativeStorageError.scheduleHasHistory {
             errorMessage = "Schedules with recorded history cannot be changed yet."
             return false
