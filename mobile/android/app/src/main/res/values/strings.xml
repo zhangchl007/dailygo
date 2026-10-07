@@ -7,6 +7,8 @@
     <string name="no_habits">No habits yet</string>
     <string name="add_habit">Add habit</string>
     <string name="edit_habit">Edit habit</string>
+    <string name="edit_goal">Edit goal</string>
+    <string name="goal_history_error">Goals with recorded history cannot be changed yet.</string>
     <string name="title">Title</string>
     <string name="schedule">Schedule</string>
     <string name="daily">Daily</string>

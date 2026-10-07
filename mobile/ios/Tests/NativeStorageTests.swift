@@ -57,9 +57,12 @@ final class NativeStorageTests: XCTestCase {
             try await repository.acknowledge(ownerID: "guest", eventID: "goal")
             let retried = try await repository.setHabitGoal(change)
             XCTAssertEqual(retried, updated)
-            await expectFailure {
+            do {
                 _ = try await repository.setHabitGoal(NativeHabitGoalCommand(ownerID: "guest", operationID: "new-goal",
                     habitID: "walk", goalKind: "steps", target: 3000, occurredAtMillis: self.instant + 2))
+                XCTFail("Goal changes with history must fail")
+            } catch {
+                XCTAssertEqual(error as? NativeStorageError, .goalHasHistory)
             }
             let other = try await repository.habits(ownerID: "other")
             let rejected = try await repository.receipt(ownerID: "guest", operationID: "new-goal")

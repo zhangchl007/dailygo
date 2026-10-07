@@ -87,6 +87,9 @@ final class NativeHabitModel: ObservableObject {
         defer { saving = false }
         do {
             try await operation(repository)
+        } catch NativeStorageError.goalHasHistory {
+            errorMessage = "Goals with recorded history cannot be changed yet."
+            return false
         } catch {
             errorMessage = error is DomainError || error as? NativeStorageError == .invalidDefinition
                 ? "Check the title, schedule, timezone and numeric value."
@@ -106,6 +109,7 @@ struct TodayView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var adding = false
     @State private var editing: NativeHabit?
+    @State private var editingGoal: NativeHabit?
     @State private var recording: NativeHabit?
     @State private var deleting: NativeHabit?
     @State private var showArchived = false
@@ -123,7 +127,7 @@ struct TodayView: View {
                 if model.loading { ProgressView() }
                 if let error = model.errorMessage {
                     Section {
-                        Text(error).foregroundStyle(.red)
+                        Text(LocalizedStringKey(error)).foregroundStyle(.red)
                         Button("Retry") { Task { await model.reload() } }.disabled(model.saving)
                     }
                 }
@@ -137,6 +141,7 @@ struct TodayView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 Menu {
                                     Button { editing = habit } label: { Label("Edit habit", systemImage: "pencil") }
+                                    Button { editingGoal = habit } label: { Label("Edit goal", systemImage: "target") }
                                     Button {
                                         let command = NativeHabitArchiveCommand(ownerID: "guest", operationID: UUID().uuidString,
                                             habitID: habit.id, archived: !habit.archived, occurredAtMillis: model.millis())
@@ -215,6 +220,7 @@ struct TodayView: View {
         .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await model.reload() } } }
         .sheet(isPresented: $adding) { NativeHabitEditor(model: model, existing: nil) }
         .sheet(item: $editing) { NativeHabitEditor(model: model, existing: $0) }
+        .sheet(item: $editingGoal) { NativeHabitEditor(model: model, existing: $0, goalOnly: true) }
         .sheet(item: $recording) { NativeProgressEditor(model: model, habit: $0) }
         .sheet(isPresented: $showSettings) { NativeSettingsView() }
         .confirmationDialog("Delete habit and its history?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
@@ -365,6 +371,7 @@ private struct NativeHistoryGrid: View {
 private struct NativeHabitEditor: View {
     @ObservedObject var model: NativeHabitModel
     let existing: NativeHabit?
+    let goalOnly: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var title: String
     @State private var schedule: String
@@ -376,9 +383,10 @@ private struct NativeHabitEditor: View {
     @State private var operationID = UUID().uuidString
     @State private var occurred: Int64
 
-    init(model: NativeHabitModel, existing: NativeHabit?) {
+    init(model: NativeHabitModel, existing: NativeHabit?, goalOnly: Bool = false) {
         self.model = model
         self.existing = existing
+        self.goalOnly = goalOnly
         _title = State(initialValue: existing?.title ?? "")
         _schedule = State(initialValue: existing?.scheduleKind ?? "daily")
         _weekly = State(initialValue: existing?.scheduleParameter ?? 3)
@@ -392,26 +400,34 @@ private struct NativeHabitEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Title", text: $title).accessibilityIdentifier("habit-title")
-                Picker("Schedule", selection: $schedule) {
-                    Text("Daily").tag("daily")
-                    Text("Weekdays").tag("weekdays")
-                    Text("Weekly").tag("weekly")
+                if !goalOnly {
+                    TextField("Title", text: $title).accessibilityIdentifier("habit-title")
+                    Picker("Schedule", selection: $schedule) {
+                        Text("Daily").tag("daily")
+                        Text("Weekdays").tag("weekdays")
+                        Text("Weekly").tag("weekly")
+                    }
+                    if schedule == "weekly" { Stepper("Days per week: \(weekly)", value: $weekly, in: 1...7) }
+                    TextField("Schedule timezone", text: $zone).textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
-                if schedule == "weekly" { Stepper("Days per week: \(weekly)", value: $weekly, in: 1...7) }
-                if existing == nil {
+                if existing == nil || goalOnly {
                     Picker("Goal", selection: $goal) {
                         Text("Completion").tag("completion")
                         Text("Steps").tag("steps")
                         Text("Minutes").tag("duration_minutes")
                         Text("Meters").tag("distance_meters")
                     }
+                    .pickerStyle(.menu)
+                    .accessibilityIdentifier("habit-goal")
                 }
-                if goal != "completion" { TextField("Target", text: $target).keyboardType(.decimalPad).disabled(existing != nil) }
-                TextField("Schedule timezone", text: $zone).textInputAutocapitalization(.never).autocorrectionDisabled()
-                if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
+                if goal != "completion" {
+                    TextField("Target", text: $target).keyboardType(.decimalPad)
+                        .disabled(existing != nil && !goalOnly).accessibilityIdentifier("habit-target")
+                }
+                if let error = model.errorMessage { Text(LocalizedStringKey(error)).foregroundStyle(.red) }
             }
-            .navigationTitle(existing == nil ? "Add habit" : "Edit habit")
+            .disabled(model.saving)
+            .navigationTitle(goalOnly ? "Edit goal" : existing == nil ? "Add habit" : "Edit habit")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(model.saving) }
                 ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(model.saving) }
@@ -429,9 +445,13 @@ private struct NativeHabitEditor: View {
             scheduleKind: schedule, scheduleParameter: parameter, zoneID: zone, occurredAtMillis: occurred, asOfMillis: model.millis())
         let operationID = operationID
         let isNew = existing == nil
+        let goalChange = NativeHabitGoalCommand(ownerID: existing?.ownerID ?? "guest", operationID: operationID, habitID: id,
+            goalKind: goal, target: goal == "completion" ? nil : Double(target), occurredAtMillis: occurred, asOfMillis: model.millis())
+        let goalOnly = goalOnly
         Task {
             let success = await model.perform { repository in
-                if isNew { _ = try await repository.saveHabit(habit, operationID: operationID) }
+                if goalOnly { _ = try await repository.setHabitGoal(goalChange) }
+                else if isNew { _ = try await repository.saveHabit(habit, operationID: operationID) }
                 else { _ = try await repository.editHabit(edit) }
             }
             if success { dismiss() }

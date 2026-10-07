@@ -119,6 +119,7 @@ class NativeHabitModel(application: Application, private val repository: LocalRe
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { state.value = state.value.copy(error = R.string.load_error) }
             } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: HabitGoalHistoryException) { state.value = state.value.copy(error = R.string.goal_history_error) }
             catch (_: IllegalArgumentException) { state.value = state.value.copy(error = R.string.validation_error) }
             catch (_: Exception) { state.value = state.value.copy(error = R.string.storage_error) }
             finally { state.value = state.value.copy(saving = false) }
@@ -160,6 +161,7 @@ class DailyGoActivity : ComponentActivity() {
 fun DailyGoScreen(model: NativeHabitModel) {
     val state by model.state.collectAsState()
     var editingId by rememberSaveable { mutableStateOf<String?>(null) }
+    var editingGoalId by rememberSaveable { mutableStateOf<String?>(null) }
     var progressId by rememberSaveable { mutableStateOf<String?>(null) }
     var deletingId by rememberSaveable { mutableStateOf<String?>(null) }
     var showArchived by rememberSaveable { mutableStateOf(false) }
@@ -207,6 +209,7 @@ fun DailyGoScreen(model: NativeHabitModel) {
                             }
                             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                                 DropdownMenuItem(text = { Text(stringResource(R.string.edit_habit)) }, onClick = { expanded = false; editingId = habit.id })
+                                DropdownMenuItem(text = { Text(stringResource(R.string.edit_goal)) }, onClick = { expanded = false; editingGoalId = habit.id })
                                 DropdownMenuItem(text = { Text(stringResource(if (habit.archived) R.string.restore else R.string.archive)) }, onClick = {
                                     expanded = false
                                     val command = HabitArchiveCommand("guest", UUID.randomUUID().toString(), habit.id, !habit.archived, model.clock.millis())
@@ -272,6 +275,9 @@ fun DailyGoScreen(model: NativeHabitModel) {
     if (showSettings) ReminderSettings(onDismiss = { showSettings = false })
     if (editingId != null && !state.loading) {
         HabitEditor(state.habits.find { it.id == editingId }, model, onDismiss = { editingId = null })
+    }
+    state.habits.find { it.id == editingGoalId }?.let { habit ->
+        HabitEditor(habit, model, goalOnly = true, onDismiss = { editingGoalId = null })
     }
     state.habits.find { it.id == progressId }?.let { habit ->
         ProgressEditor(habit, model, onDismiss = { progressId = null })
@@ -344,7 +350,7 @@ private fun Choice(label: Int, value: String, options: List<String>, text: (Stri
 }
 
 @Composable
-private fun HabitEditor(existing: HabitRow?, model: NativeHabitModel, onDismiss: () -> Unit) {
+private fun HabitEditor(existing: HabitRow?, model: NativeHabitModel, goalOnly: Boolean = false, onDismiss: () -> Unit) {
     val state by model.state.collectAsState()
     val id = rememberSaveable { existing?.id ?: UUID.randomUUID().toString() }
     val operationId = rememberSaveable { UUID.randomUUID().toString() }
@@ -355,14 +361,16 @@ private fun HabitEditor(existing: HabitRow?, model: NativeHabitModel, onDismiss:
     var goal by rememberSaveable { mutableStateOf(existing?.goalKind ?: "completion") }
     var target by rememberSaveable { mutableStateOf(existing?.target?.toString() ?: "") }
     var zone by rememberSaveable { mutableStateOf(existing?.zoneId ?: model.clock.zone.id) }
-    AlertDialog(onDismissRequest = { if (!state.saving) onDismiss() }, title = { Text(stringResource(if (existing == null) R.string.add_habit else R.string.edit_habit)) },
+    AlertDialog(onDismissRequest = { if (!state.saving) onDismiss() }, title = { Text(stringResource(if (goalOnly) R.string.edit_goal else if (existing == null) R.string.add_habit else R.string.edit_habit)) },
         text = { LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            item { OutlinedTextField(title, { title = it }, label = { Text(stringResource(R.string.title)) }, modifier = Modifier.testTag("habit-title")) }
-            item { Choice(R.string.schedule, schedule, listOf("daily", "weekdays", "weekly"), ::scheduleLabel) { schedule = it } }
-            if (schedule == "weekly") item { OutlinedTextField(weekly, { weekly = it }, label = { Text(stringResource(R.string.weekly_target)) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)) }
-            if (existing == null) item { Choice(R.string.goal, goal, listOf("completion", "steps", "duration_minutes", "distance_meters"), ::goalLabel) { goal = it } }
-            if (goal != "completion") item { OutlinedTextField(target, { target = it }, readOnly = existing != null, label = { Text(stringResource(R.string.target)) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)) }
-            item { OutlinedTextField(zone, { zone = it }, label = { Text(stringResource(R.string.timezone)) }) }
+            if (!goalOnly) {
+                item { OutlinedTextField(title, { title = it }, label = { Text(stringResource(R.string.title)) }, modifier = Modifier.testTag("habit-title")) }
+                item { Choice(R.string.schedule, schedule, listOf("daily", "weekdays", "weekly"), ::scheduleLabel) { schedule = it } }
+                if (schedule == "weekly") item { OutlinedTextField(weekly, { weekly = it }, label = { Text(stringResource(R.string.weekly_target)) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)) }
+                item { OutlinedTextField(zone, { zone = it }, label = { Text(stringResource(R.string.timezone)) }) }
+            }
+            if (existing == null || goalOnly) item { Choice(R.string.goal, goal, listOf("completion", "steps", "duration_minutes", "distance_meters"), ::goalLabel) { goal = it } }
+            if (goal != "completion") item { OutlinedTextField(target, { target = it }, readOnly = existing != null && !goalOnly, modifier = Modifier.testTag("habit-target"), label = { Text(stringResource(R.string.target)) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)) }
             state.error?.let { error -> item { Text(stringResource(error), color = MaterialTheme.colorScheme.error) } }
         } },
         confirmButton = { TextButton(enabled = !state.saving, onClick = {
@@ -375,10 +383,15 @@ private fun HabitEditor(existing: HabitRow?, model: NativeHabitModel, onDismiss:
             val zoneValue = zone
             val asOf = model.clock.millis()
             model.mutate(onSuccess = onDismiss) { repository ->
-                val parameter = if (scheduleValue == "weekly") requireNotNull(weeklyValue.toIntOrNull()) else null
-                if (existing == null) repository.saveHabit(HabitRow("guest", id, titleValue, scheduleValue, parameter, goalValue,
-                    if (goalValue == "completion") null else requireNotNull(targetValue.toDoubleOrNull()), zoneValue, instant, false), operationId)
-                else repository.editHabit(HabitEditCommand("guest", operationId, id, titleValue, scheduleValue, parameter, zoneValue, instant, asOf))
+                if (goalOnly) {
+                    repository.setHabitGoal(HabitGoalCommand(requireNotNull(existing).ownerId, operationId, id, goalValue,
+                        if (goalValue == "completion") null else requireNotNull(targetValue.toDoubleOrNull()), instant, asOf))
+                } else {
+                    val parameter = if (scheduleValue == "weekly") requireNotNull(weeklyValue.toIntOrNull()) else null
+                    if (existing == null) repository.saveHabit(HabitRow("guest", id, titleValue, scheduleValue, parameter, goalValue,
+                        if (goalValue == "completion") null else requireNotNull(targetValue.toDoubleOrNull()), zoneValue, instant, false), operationId)
+                    else repository.editHabit(HabitEditCommand("guest", operationId, id, titleValue, scheduleValue, parameter, zoneValue, instant, asOf))
+                }
             }
         }) { Text(stringResource(R.string.save)) } },
         dismissButton = { TextButton(enabled = !state.saving, onClick = onDismiss) { Text(stringResource(R.string.cancel)) } })

@@ -2,6 +2,75 @@ import XCTest
 
 @MainActor
 final class LaunchTests: XCTestCase {
+    func testGoalChangesPersistAndRejectInvalidValuesAndRecordedHistory() {
+        let app = XCUIApplication()
+        let title = "Goal walk"
+        app.launchEnvironment["DAILYGO_UI_TEST_STORE"] = UUID().uuidString
+        app.launch()
+        XCTAssertTrue(app.buttons["add-habit"].waitForExistence(timeout: 10))
+        app.buttons["add-habit"].tap()
+        app.textFields["habit-title"].tap()
+        app.textFields["habit-title"].typeText(title)
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 10))
+        app.buttons["Habit options"].tap()
+        app.buttons["Edit goal"].tap()
+        app.buttons["habit-goal"].tap()
+        app.buttons["Steps"].tap()
+        let target = app.textFields["habit-target"]
+        target.tap()
+        target.typeText("0")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts["Check the title, schedule, timezone and numeric value."].waitForExistence(timeout: 10))
+        target.typeText("1000")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.buttons["Record progress"].waitForExistence(timeout: 10))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.buttons["Record progress"].waitForExistence(timeout: 10))
+        app.buttons["Habit options"].tap()
+        app.buttons["Edit goal"].tap()
+        XCTAssertTrue(target.waitForExistence(timeout: 10))
+        XCTAssertEqual(target.value as? String, "1000.0")
+        app.buttons["Cancel"].tap()
+        app.buttons["Record progress"].tap()
+        let value = app.textFields["Manual value"]
+        XCTAssertTrue(value.waitForExistence(timeout: 10))
+        value.tap()
+        value.typeText("100")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(value.waitForNonExistence(timeout: 10))
+        app.buttons["Habit options"].tap()
+        app.buttons["Edit goal"].tap()
+        XCTAssertTrue(target.waitForExistence(timeout: 10))
+        replaceText(target, with: "2000")
+        XCTAssertEqual(target.value as? String, "2000")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts["Goals with recorded history cannot be changed yet."].waitForExistence(timeout: 10))
+        app.buttons["Cancel"].tap()
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 10))
+        app.buttons["Habit options"].tap()
+        app.buttons["Edit goal"].tap()
+        XCTAssertTrue(target.waitForExistence(timeout: 10))
+        XCTAssertEqual(target.value as? String, "1000.0")
+    }
+
+    private func replaceText(_ field: XCUIElement, with value: String) {
+        field.tap()
+        field.press(forDuration: 1.2)
+        let selectAll = XCUIApplication().menuItems["Select All"]
+        if selectAll.waitForExistence(timeout: 2) {
+            selectAll.tap()
+        } else {
+            let selectAllButton = XCUIApplication().buttons["Select All"]
+            XCTAssertTrue(selectAllButton.waitForExistence(timeout: 2))
+            selectAllButton.tap()
+        }
+        field.typeText(value)
+    }
+
     func testRemindersRemainOptInAcrossRelaunch() {
         let app = XCUIApplication()
         app.launchEnvironment["DAILYGO_UI_TEST_STORE"] = UUID().uuidString

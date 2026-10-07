@@ -210,7 +210,7 @@ actor NativeRepository {
                     $0.ownerID == ownerID && $0.category == category && $0.habitScope?.key == scopeKey
                 })
                 descriptor.fetchLimit = 1
-                guard try ledgerContext.fetch(descriptor).isEmpty else { throw NativeStorageError.invalidDefinition }
+                guard try ledgerContext.fetch(descriptor).isEmpty else { throw NativeStorageError.goalHasHistory }
             }
             let updated = try command.applying(to: decode(NativeHabit.self, record))
             record.payload = try NativeStorageEncoding.encode(updated)

@@ -230,7 +230,7 @@ class LocalRepository(private val database: LocalDatabase) {
                 }
                 val habit = requireNotNull(ledger.habit(command.ownerId, command.habitId)) { "Habit not found" }
                 require(command.occurredAtMillis >= habit.createdAtMillis) { "Change precedes habit creation" }
-                require(!ledger.hasHabitHistory(command.ownerId, command.habitId)) { "Goal changes require a habit without history" }
+                if (ledger.hasHabitHistory(command.ownerId, command.habitId)) throw HabitGoalHistoryException()
                 val updated = habit.copy(goalKind = command.goalKind, target = command.target)
                 updated.definition()
                 require(ledger.updateHabit(updated) == 1) { "Habit not found" }

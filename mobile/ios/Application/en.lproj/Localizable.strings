@@ -4,6 +4,8 @@
 "Archived" = "Archived";
 "Retry" = "Retry";
 "Edit habit" = "Edit habit";
+"Edit goal" = "Edit goal";
+"Goals with recorded history cannot be changed yet." = "Goals with recorded history cannot be changed yet.";
 "Restore" = "Restore";
 "Archive" = "Archive";
 "Delete habit" = "Delete habit";

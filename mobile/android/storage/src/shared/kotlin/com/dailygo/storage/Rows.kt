@@ -117,6 +117,8 @@ data class HabitEditCommand(
     val asOfMillis: Long = occurredAtMillis,
 )
 
+class HabitGoalHistoryException : IllegalArgumentException("Goal changes require a habit without history")
+
 @Serializable
 data class HabitGoalCommand(
     val ownerId: String,

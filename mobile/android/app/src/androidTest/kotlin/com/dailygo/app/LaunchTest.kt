@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.test.core.app.ApplicationProvider
@@ -114,6 +115,59 @@ class LaunchTest {
         compose.onNodeWithText(context.getString(R.string.delete_habit)).performClick()
         compose.onNodeWithTag("confirm-habit-delete").performClick()
         awaitText(context.getString(R.string.no_habits))
+    }
+
+    @Test
+    fun goalChangesPersistAndRejectInvalidValuesAndRecordedHistory() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val title = "Goal walk $testStore"
+        awaitText(context.getString(R.string.no_habits))
+        compose.onNodeWithText(context.getString(R.string.add_habit)).performClick()
+        compose.onNodeWithTag("habit-title").performTextInput(title)
+        compose.onNodeWithText(context.getString(R.string.save)).performClick()
+        awaitText(title)
+        compose.onNodeWithContentDescription(context.getString(R.string.habit_options)).performClick()
+        compose.onNodeWithText(context.getString(R.string.edit_goal)).performClick()
+        compose.onNodeWithText("${context.getString(R.string.goal)}: ${context.getString(R.string.completion)}").performClick()
+        compose.onNodeWithText(context.getString(R.string.steps)).performClick()
+        compose.onNodeWithTag("habit-target").performTextInput("-1")
+        compose.onNodeWithText(context.getString(R.string.save)).performClick()
+        awaitText(context.getString(R.string.validation_error))
+        compose.onNodeWithTag("habit-target").performTextClearance()
+        compose.onNodeWithTag("habit-target").performTextInput("1000")
+        compose.onNodeWithText(context.getString(R.string.save)).performClick()
+        awaitText(context.getString(R.string.record_progress))
+        compose.activityRule.scenario.recreate()
+        awaitText(context.getString(R.string.record_progress))
+        compose.onNodeWithContentDescription(context.getString(R.string.habit_options)).performClick()
+        compose.onNodeWithText(context.getString(R.string.edit_goal)).performClick()
+        compose.onNodeWithTag("habit-target").assertTextEquals("1000.0")
+        compose.onNodeWithText(context.getString(R.string.cancel)).performClick()
+        compose.onNodeWithText(context.getString(R.string.record_progress)).performClick()
+        compose.onNodeWithText(context.getString(R.string.manual_value)).performTextInput("100")
+        compose.onNodeWithText(context.getString(R.string.save)).performClick()
+        compose.waitUntil(timeoutMillis = 10_000) {
+            compose.onAllNodesWithText(context.getString(R.string.manual_value)).fetchSemanticsNodes().isEmpty()
+        }
+        compose.onNodeWithContentDescription(context.getString(R.string.habit_options)).performClick()
+        compose.onNodeWithText(context.getString(R.string.edit_goal)).performClick()
+        compose.onNodeWithTag("habit-target").performTextClearance()
+        compose.onNodeWithTag("habit-target").performTextInput("2000")
+        compose.onNodeWithText(context.getString(R.string.save)).performClick()
+        awaitText(context.getString(R.string.goal_history_error))
+        compose.onNodeWithText(context.getString(R.string.cancel)).performClick()
+        compose.activityRule.scenario.recreate()
+        awaitText(title)
+        compose.onNodeWithContentDescription(context.getString(R.string.habit_options)).performClick()
+        compose.onNodeWithText(context.getString(R.string.edit_goal)).performClick()
+        compose.onNodeWithTag("habit-target").assertTextEquals("1000.0")
+        val repository = (compose.activity.application as DailyGoApplication).repositoryFor(testStore)
+        kotlinx.coroutines.runBlocking {
+            val habit = repository.habits("guest").single()
+            org.junit.Assert.assertEquals(title, habit.title)
+            org.junit.Assert.assertEquals("steps", habit.goalKind)
+            org.junit.Assert.assertEquals(1000.0, habit.target)
+        }
     }
 
     @Test

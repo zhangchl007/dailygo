@@ -258,7 +258,7 @@ class RepositoryTest {
             repository.recordProgress(ProgressCommand("guest", "partial", "partial", "walk", instant + 2, 400.0))
             database.ledger().acknowledge("guest", "goal")
             assertEquals(updated, repository.setHabitGoal(change.copy(asOfMillis = instant + 10)))
-            assertThrows(IllegalArgumentException::class.java) { runBlocking {
+            assertThrows(HabitGoalHistoryException::class.java) { runBlocking {
                 repository.setHabitGoal(change.copy(operationId = "new-goal", target = 2000.0,
                     occurredAtMillis = instant + 3, asOfMillis = instant + 3))
             } }
