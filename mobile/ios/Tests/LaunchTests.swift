@@ -22,7 +22,8 @@ final class LaunchTests: XCTestCase {
         target.typeText("0")
         app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts["Check the title, schedule, timezone and numeric value."].waitForExistence(timeout: 10))
-        target.typeText("1000")
+        replaceNumericText(target, with: "1000")
+        XCTAssertEqual(target.value as? String, "1000")
         app.buttons["Save"].tap()
         XCTAssertTrue(app.buttons["Record progress"].waitForExistence(timeout: 10))
         app.terminate()
@@ -43,7 +44,7 @@ final class LaunchTests: XCTestCase {
         app.buttons["Habit options"].tap()
         app.buttons["Edit goal"].tap()
         XCTAssertTrue(target.waitForExistence(timeout: 10))
-        replaceText(target, with: "2000")
+        replaceNumericText(target, with: "2000")
         XCTAssertEqual(target.value as? String, "2000")
         app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts["Goals with recorded history cannot be changed yet."].waitForExistence(timeout: 10))
@@ -57,18 +58,10 @@ final class LaunchTests: XCTestCase {
         XCTAssertEqual(target.value as? String, "1000.0")
     }
 
-    private func replaceText(_ field: XCUIElement, with value: String) {
-        field.tap()
-        field.press(forDuration: 1.2)
-        let selectAll = XCUIApplication().menuItems["Select All"]
-        if selectAll.waitForExistence(timeout: 2) {
-            selectAll.tap()
-        } else {
-            let selectAllButton = XCUIApplication().buttons["Select All"]
-            XCTAssertTrue(selectAllButton.waitForExistence(timeout: 2))
-            selectAllButton.tap()
-        }
-        field.typeText(value)
+    private func replaceNumericText(_ field: XCUIElement, with value: String) {
+        let current = field.value as? String ?? ""
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count) + value)
     }
 
     func testRemindersRemainOptInAcrossRelaunch() {

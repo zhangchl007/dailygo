@@ -6,7 +6,10 @@ import android.content.Intent
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.test.core.app.ApplicationProvider
@@ -141,7 +144,7 @@ class LaunchTest {
         awaitText(context.getString(R.string.record_progress))
         compose.onNodeWithContentDescription(context.getString(R.string.habit_options)).performClick()
         compose.onNodeWithText(context.getString(R.string.edit_goal)).performClick()
-        compose.onNodeWithTag("habit-target").assertTextEquals("1000.0")
+        compose.onNodeWithTag("habit-target").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("1000.0")))
         compose.onNodeWithText(context.getString(R.string.cancel)).performClick()
         compose.onNodeWithText(context.getString(R.string.record_progress)).performClick()
         compose.onNodeWithText(context.getString(R.string.manual_value)).performTextInput("100")
@@ -160,7 +163,7 @@ class LaunchTest {
         awaitText(title)
         compose.onNodeWithContentDescription(context.getString(R.string.habit_options)).performClick()
         compose.onNodeWithText(context.getString(R.string.edit_goal)).performClick()
-        compose.onNodeWithTag("habit-target").assertTextEquals("1000.0")
+        compose.onNodeWithTag("habit-target").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("1000.0")))
         val repository = (compose.activity.application as DailyGoApplication).repositoryFor(testStore)
         kotlinx.coroutines.runBlocking {
             val habit = repository.habits("guest").single()
