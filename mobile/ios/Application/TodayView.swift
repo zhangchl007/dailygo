@@ -7,6 +7,7 @@ final class NativeHabitModel: ObservableObject {
     @Published private(set) var habits: [NativeHabit] = []
     @Published private(set) var completed = Set<String>()
     @Published private(set) var completionRecords: [String: NativeEntry] = [:]
+    @Published private(set) var completionValues: [String: Double] = [:]
     @Published private(set) var streaks: [String: StreakSummary] = [:]
     @Published private(set) var recentDates: [String: Set<String>] = [:]
     @Published private(set) var asOfDays: [String: LocalDay] = [:]
@@ -60,6 +61,7 @@ final class NativeHabitModel: ObservableObject {
         var recent: [String: Set<String>] = [:]
         var datesByHabit: [String: LocalDay] = [:]
         var records: [String: NativeEntry] = [:]
+        var values: [String: Double] = [:]
         for habit in snapshot {
             let asOf = try CalendarPolicy.credit(now: instant, zoneID: habit.zoneID).date
             let entries = try await repository.entries(ownerID: "guest", habitID: habit.id, kind: .completion)
@@ -67,7 +69,12 @@ final class NativeHabitModel: ObservableObject {
             let summary = try StreakCalculator.calculate(schedule: habit.definition().schedule, dates: days, asOf: asOf)
             summaries[habit.id] = summary
             datesByHabit[habit.id] = asOf
-            records[habit.id] = try await repository.completionRecordOn(ownerID: "guest", habitID: habit.id, date: asOf.description)
+            let record = try await repository.completionRecordOn(ownerID: "guest", habitID: habit.id, date: asOf.description)
+            records[habit.id] = record
+            if let record, let originalValue = record.value {
+                let correction = try await repository.latestCompletionValueCorrection(ownerID: "guest", recordID: record.id)
+                values[record.id] = correction?.value ?? originalValue
+            }
             if summary.isCheckedInToday { complete.insert(habit.id) }
             let history = try await repository.recentCompletions(ownerID: "guest", habitID: habit.id, through: asOf.description)
             recent[habit.id] = Set(history.map(\.creditedDate))
@@ -75,6 +82,7 @@ final class NativeHabitModel: ObservableObject {
         habits = snapshot
         completed = complete
         completionRecords = records
+        completionValues = values
         streaks = summaries
         recentDates = recent
         asOfDays = datesByHabit
@@ -82,7 +90,10 @@ final class NativeHabitModel: ObservableObject {
     }
 
     func perform(_ operation: @Sendable (NativeRepository) async throws -> Void) async -> Bool {
-        guard !saving, let repository else { return false }
+        guard !saving, let repository else {
+            errorMessage = "Could not save your data. Please retry."
+            return false
+        }
         saving = true
         errorMessage = nil
         defer { saving = false }
@@ -115,6 +126,7 @@ struct TodayView: View {
     @State private var editing: NativeHabit?
     @State private var editingGoal: NativeHabit?
     @State private var recording: NativeHabit?
+    @State private var correcting: NativeEntry?
     @State private var deleting: NativeHabit?
     @State private var showArchived = false
     @State private var historyHabitID: String?
@@ -190,6 +202,19 @@ struct TodayView: View {
                                 .disabled(model.saving || model.completionRecords[habit.id] != nil)
                                 if let entry = model.completionRecords[habit.id] {
                                     let isActive = model.completed.contains(habit.id)
+                                    if let value = model.completionValues[entry.id] {
+                                        Text(value.formatted())
+                                            .accessibilityIdentifier("completion-value")
+                                        Text(entry.creditedDate)
+                                            .accessibilityIdentifier("completion-credit-date")
+                                        let provenance = entry.provenance ?? (entry.creditReason == .legacyImported ? .legacyImported : .manual)
+                                        Text(LocalizedStringKey(provenance.localizationKey))
+                                            .accessibilityIdentifier("completion-provenance")
+                                        Button("Correct value") { correcting = entry }
+                                            .accessibilityIdentifier("correct-completion-value")
+                                            .buttonStyle(.borderless)
+                                            .disabled(model.saving)
+                                    }
                                     Button(isActive ? "Undo completion" : "Restore completion") {
                                         let command = NativeCompletionCorrectionCommand(ownerID: "guest", operationID: UUID().uuidString,
                                             recordID: entry.id, active: !isActive, occurredAtMillis: model.millis())
@@ -226,6 +251,12 @@ struct TodayView: View {
         .sheet(item: $editing) { NativeHabitEditor(model: model, existing: $0) }
         .sheet(item: $editingGoal) { NativeHabitEditor(model: model, existing: $0, goalOnly: true) }
         .sheet(item: $recording) { NativeProgressEditor(model: model, habit: $0) }
+        .sheet(item: $correcting) { entry in
+            NativeCompletionValueEditor(model: model, entry: entry,
+                currentValue: model.completionValues[entry.id] ?? entry.value ?? 0) {
+                correcting = nil
+            }
+        }
         .sheet(isPresented: $showSettings) { NativeSettingsView() }
         .confirmationDialog("Delete habit and its history?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
             if let habit = deleting {
@@ -341,6 +372,7 @@ private struct NativeSettingsView: View {
 }
 
 extension NativeHabit: Identifiable {}
+extension NativeEntry: Identifiable {}
 
 private func scheduleName(_ kind: String) -> String {
     switch kind { case "weekdays": "Weekdays"; case "weekly": "Weekly"; default: "Daily" }
@@ -517,6 +549,68 @@ private struct NativeProgressEditor: View {
                 else { _ = try await repository.recordProgress(command) }
             }
             if success { dismiss() }
+        }
+    }
+}
+
+private struct NativeCompletionValueEditor: View {
+    @ObservedObject var model: NativeHabitModel
+    let entry: NativeEntry
+    let onSaved: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var value: String
+    @State private var operationID = UUID().uuidString
+    @State private var invalidValue = false
+    @FocusState private var valueFocused: Bool
+
+    init(model: NativeHabitModel, entry: NativeEntry, currentValue: Double, onSaved: @escaping () -> Void) {
+        self.model = model
+        self.entry = entry
+        self.onSaved = onSaved
+        _value = State(initialValue: String(currentValue))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                HStack {
+                    TextField("Completion value", text: $value)
+                        .keyboardType(.decimalPad)
+                        .focused($valueFocused)
+                        .accessibilityIdentifier("completion-correction-value")
+                    if !value.isEmpty {
+                        Button { value = ""; valueFocused = true } label: { Image(systemName: "xmark.circle.fill").frame(width: 44, height: 44) }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Clear completion value")
+                            .accessibilityIdentifier("clear-completion-correction-value")
+                    }
+                }
+                if invalidValue { Text("Enter a valid numeric value.").foregroundStyle(.red) }
+                if let error = model.errorMessage { Text(LocalizedStringKey(error)).foregroundStyle(.red) }
+            }
+            .navigationTitle("Correct value")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(model.saving) }
+                ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(model.saving) }
+            }
+        }
+        .interactiveDismissDisabled(model.saving)
+    }
+
+    private func save() {
+        guard let number = Double(value), number.isFinite else {
+            invalidValue = true
+            return
+        }
+        invalidValue = false
+        let command = NativeCompletionValueCorrectionCommand(ownerID: entry.ownerID, operationID: operationID,
+            recordID: entry.id, value: number, occurredAtMillis: max(model.millis(), entry.occurredAtMillis),
+            asOfMillis: model.millis())
+        Task {
+            let success = await model.perform { repository in
+                _ = try await repository.correctCompletionValue(command)
+            }
+            if success { onSaved() }
         }
     }
 }

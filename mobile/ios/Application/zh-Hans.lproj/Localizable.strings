@@ -44,6 +44,14 @@
 "Cancel" = "取消";
 "Save" = "保存";
 "Manual value" = "手动输入数值";
+"Manual" = "手动";
+"HealthKit" = "健康数据";
+"Health Connect" = "健康连接";
+"Imported (unverified)" = "导入（未验证）";
+"Correct value" = "更正数值";
+"Completion value" = "完成数值";
+"Clear completion value" = "清除完成数值";
+"Enter a valid numeric value." = "请输入有效数值。";
 "Could not load your data. Please retry." = "无法加载数据，请重试。";
 "Check the title, schedule, timezone and numeric value." = "请检查名称、计划、时区和数值。";
 "Could not save your data. Please retry." = "无法保存数据，请重试。";

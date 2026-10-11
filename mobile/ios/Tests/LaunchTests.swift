@@ -7,8 +7,14 @@ final class LaunchTests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testGoalChangesPersistAndRejectInvalidValuesAndRecordedHistory() {
+    private func application(language: String = "en", locale: String = "en_US") -> XCUIApplication {
         let app = XCUIApplication()
+        app.launchArguments += ["-AppleLanguages", "(\(language))", "-AppleLocale", locale]
+        return app
+    }
+
+    func testGoalChangesPersistAndRejectInvalidValuesAndRecordedHistory() {
+        let app = application()
         let title = "Goal walk"
         app.launchEnvironment["DAILYGO_UI_TEST_STORE"] = UUID().uuidString
         app.launch()
@@ -76,6 +82,75 @@ final class LaunchTests: XCTestCase {
         XCTAssertEqual(target.value as? String, "1000.0")
     }
 
+    func testNumericCompletionCorrectionRetainsCreditAndManualProvenance() {
+        let app = application()
+        let testStore = UUID().uuidString
+        app.launchEnvironment["DAILYGO_UI_TEST_STORE"] = testStore
+        app.launch()
+        XCTAssertTrue(app.buttons["add-habit"].waitForExistence(timeout: 10))
+        app.buttons["add-habit"].tap()
+        awaitEditor(app)
+        app.textFields["habit-title"].tap()
+        app.textFields["habit-title"].typeText("Correction \(testStore)")
+        app.buttons["Save"].tap()
+        awaitEditorClosed(app)
+
+        app.buttons["Habit options"].tap()
+        app.buttons["Edit goal"].tap()
+        awaitEditor(app)
+        let picker = app.descendants(matching: .any)["habit-goal"].firstMatch
+        awaitHittable(picker)
+        picker.tap()
+        let steps = app.descendants(matching: .any)["Steps"].firstMatch
+        awaitHittable(steps)
+        steps.tap()
+        let target = app.textFields["habit-target"]
+        target.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10))
+        target.typeText("1000")
+        app.buttons["Save"].tap()
+        awaitEditorClosed(app)
+
+        app.buttons["Record progress"].tap()
+        let value = app.textFields["Manual value"]
+        XCTAssertTrue(value.waitForExistence(timeout: 10))
+        value.tap()
+        value.typeText("1000")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts["completion-value"].waitForExistence(timeout: 10))
+        let originalDate = app.staticTexts["completion-credit-date"].label
+        XCTAssertFalse(originalDate.isEmpty)
+        XCTAssertEqual(app.staticTexts["completion-provenance"].label, "Manual")
+
+        app.buttons["correct-completion-value"].tap()
+        let correctedValue = app.textFields["completion-correction-value"]
+        XCTAssertTrue(correctedValue.waitForExistence(timeout: 10))
+        replaceText(
+            correctedValue,
+            clearButton: app.buttons["clear-completion-correction-value"],
+            with: "1200",
+            in: app
+        )
+        app.buttons["Save"].tap()
+        if app.staticTexts["Could not save your data. Please retry."].waitForExistence(timeout: 10) {
+            XCTFail("Correction save failed with a persistence error.")
+        }
+        if app.staticTexts["Check the title, schedule, timezone and numeric value."].exists {
+            XCTFail("Correction save failed validation.")
+        }
+        XCTAssertTrue(correctedValue.waitForNonExistence(timeout: 10), app.debugDescription)
+        XCTAssertEqual(app.staticTexts["completion-value"].label, 1200.0.formatted())
+        XCTAssertEqual(app.staticTexts["completion-credit-date"].label, originalDate)
+        XCTAssertEqual(app.staticTexts["completion-provenance"].label, "Manual")
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["completion-value"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.staticTexts["completion-value"].label, 1200.0.formatted())
+        XCTAssertEqual(app.staticTexts["completion-credit-date"].label, originalDate)
+        XCTAssertEqual(app.staticTexts["completion-provenance"].label, "Manual")
+    }
+
     private func awaitHittable(_ element: XCUIElement) {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element)
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 10), .completed)
@@ -94,12 +169,13 @@ final class LaunchTests: XCTestCase {
         clearButton.tap()
         XCTAssertTrue(clearButton.waitForNonExistence(timeout: 10))
         awaitHittable(field)
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10))
+        field.tap()
         field.typeText(value)
+        XCTAssertEqual(field.value as? String, value)
     }
 
     func testRemindersRemainOptInAcrossRelaunch() {
-        let app = XCUIApplication()
+        let app = application()
         app.launchEnvironment["DAILYGO_UI_TEST_STORE"] = UUID().uuidString
         app.launch()
         XCTAssertTrue(app.buttons["settings"].waitForExistence(timeout: 10))
@@ -119,8 +195,36 @@ final class LaunchTests: XCTestCase {
         XCTAssertEqual(app.alerts.count, 0)
     }
 
+    func testSettingsRemainAccessibleAndLocalizedAfterRelaunch() {
+        let app = application(language: "zh-Hans", locale: "zh_CN")
+        app.launchEnvironment["DAILYGO_UI_TEST_STORE"] = UUID().uuidString
+        app.launch()
+        let settings = app.buttons["settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        XCTAssertEqual(settings.label, "设置")
+        settings.tap()
+
+        let reminder = app.switches["reminder-toggle"]
+        XCTAssertTrue(reminder.waitForExistence(timeout: 10))
+        XCTAssertEqual(reminder.label, "提醒")
+        XCTAssertEqual(reminder.value as? String, "0")
+        XCTAssertTrue(app.staticTexts["每天晚上 8:00"].exists)
+        XCTAssertEqual(app.alerts.count, 0)
+        app.buttons["完成"].tap()
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        XCTAssertEqual(settings.label, "设置")
+        settings.tap()
+        XCTAssertTrue(reminder.waitForExistence(timeout: 10))
+        XCTAssertEqual(reminder.label, "提醒")
+        XCTAssertEqual(reminder.value as? String, "0")
+        XCTAssertEqual(app.alerts.count, 0)
+    }
+
     func testNativeApplicationLaunches() {
-        let app = XCUIApplication()
+        let app = application()
         let testStore = UUID().uuidString
         app.launchEnvironment["DAILYGO_UI_TEST_STORE"] = testStore
         app.launch()

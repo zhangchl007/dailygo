@@ -13,9 +13,18 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.DynamicTest
+import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestFactory
 
 class StreakFixtureTest {
+    @Test
+    fun weeklyTargetAcceptsOneAndSevenButRejectsValuesOutsideRange() {
+        assertEquals(1, Schedule.Weekly(1).target)
+        assertEquals(7, Schedule.Weekly(7).target)
+        assertThrows(IllegalArgumentException::class.java) { Schedule.Weekly(0) }
+        assertThrows(IllegalArgumentException::class.java) { Schedule.Weekly(8) }
+    }
+
     @TestFactory
     fun sharedFixtures(): List<DynamicTest> {
         val path = Path.of(System.getProperty("dailygo.fixtures"), "streaks.json")

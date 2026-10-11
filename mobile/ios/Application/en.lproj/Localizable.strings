@@ -44,6 +44,14 @@
 "Cancel" = "Cancel";
 "Save" = "Save";
 "Manual value" = "Manual value";
+"Manual" = "Manual";
+"HealthKit" = "HealthKit";
+"Health Connect" = "Health Connect";
+"Imported (unverified)" = "Imported (unverified)";
+"Correct value" = "Correct value";
+"Completion value" = "Completion value";
+"Clear completion value" = "Clear completion value";
+"Enter a valid numeric value." = "Enter a valid numeric value.";
 "Could not load your data. Please retry." = "Could not load your data. Please retry.";
 "Check the title, schedule, timezone and numeric value." = "Check the title, schedule, timezone and numeric value.";
 "Could not save your data. Please retry." = "Could not save your data. Please retry.";

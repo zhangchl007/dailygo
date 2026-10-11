@@ -1,212 +1,224 @@
 # DailyGo
 
-<img src="assets/brand/dailygo-mark.svg" alt="DailyGo 深大附中标志" width="96">
+<p align="center">
+  <img src="assets/brand/dailygo-mark.svg" alt="DailyGo logo" width="96">
+</p>
 
-面向深大附中的每日运动与习惯成长应用。展开的书页代表校园与求知，向上的橙色火焰代表青春、行动与持续进步。
+DailyGo is a native iOS and Android app for daily exercise and habit tracking at
+Shenzhen University Normal College Affiliated High School (深大附中).
 
-Production native fitness check-ins for iOS and Android. Implementation is in
-progress; this repository does not yet contain release-ready mobile applications.
+The open book in the logo represents learning and campus life. The orange flame
+represents youth, action, and steady progress.
 
-## Supported Direction
+> **Project status:** active development. The native apps and core workflows are
+> functional, but DailyGo is not yet ready for App Store or Play Store release.
 
-Swift/SwiftUI and Kotlin/Compose own platform code. Native domain libraries share
-the same versioned JSON acceptance vectors. The retired Rust/UniFFI implementation,
-generated bindings and obsolete FFI mobile shells were removed after native parity,
-legacy import and persistence recovery passed on both platforms. The app targets
-use only native Swift and Kotlin code.
+## What Works Today
 
-Release specifications under `specs/006-production-native-release` are local-only
-and intentionally excluded from Git. Remaining public release gates are summarized
-below.
+- Create, edit, archive, and restore habits
+- Record daily completions and numeric progress
+- View streaks and recent history
+- Undo, restore, and correct completed entries
+- Configure opt-in local reminders
+- Persist data locally with Room on Android and SwiftData on iOS
+- Import legacy data and create versioned local backups
+- Share the same JSON acceptance fixtures across Swift and Kotlin domain tests
+- Display English and Simplified Chinese UI on iOS
 
-## Native Domain Tests
+Accounts, cloud sync, production health-data integration, complete onboarding,
+release signing, and store submission are still in progress.
+
+## Tech Stack
+
+| Area | Android | iOS |
+| --- | --- | --- |
+| UI | Kotlin + Jetpack Compose | Swift + SwiftUI |
+| Storage | Room + bundled SQLite | SwiftData |
+| Domain | Native Kotlin | Native Swift package |
+| Minimum OS | Android 9 / API 28 | iOS 17 |
+
+There is no cross-platform runtime or FFI layer. Each app is fully native, while
+versioned fixtures in `tests/fixtures` keep domain behavior aligned.
+
+## Requirements
+
+### For domain and storage tests
+
+- Git
+- Java 17
+- `make`
+- macOS with Swift 6, or supported x86_64 Linux
+
+The repository helpers download and verify the pinned Gradle distribution.
+On supported Linux systems, the Swift helper can also download and verify Swift
+6.0.3.
+
+### For Android app development
+
+- Java 17
+- Android Studio with an Android SDK
+- Android API 36
+- Android Build Tools 35.0.0
+- An API 35+ emulator or physical device for instrumentation tests
+
+Set `ANDROID_HOME`, or create the ignored
+`mobile/android/local.properties` file with your SDK path.
+
+### For iOS app development
+
+- macOS
+- Xcode 16.4 or newer
+- An iOS 17+ simulator or device
+
+## Quick Start
+
+Clone the repository and run the SDK-free validation:
 
 ```sh
-make native-test
+git clone https://github.com/zhangchl007/dailygo.git
+cd dailygo
+make test
 ```
 
-Or run independently:
+`make test` runs the Kotlin and Swift domain suites, Room storage tests, and
+native project checks. It does not require an Android SDK.
+
+### Run the Android app
+
+Build a debug APK:
+
+```sh
+make native-android-build
+```
+
+The APK is written to:
+
+```text
+mobile/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+To work in Android Studio:
+
+1. Add `androidApp=true` to your user Gradle properties file at
+   `~/.gradle/gradle.properties`.
+2. Open `mobile/android`.
+3. Select the `app` run configuration and an API 35+ device.
+4. Run the app.
+
+The app module is opt-in so domain and storage tests can run without an Android
+SDK.
+
+### Run the iOS app
+
+1. Open `mobile/ios/DailyGo.xcodeproj` in Xcode.
+2. Select the shared `DailyGo` scheme.
+3. Choose an iOS 17+ simulator.
+4. Press **Run**.
+
+To build and test from the command line:
+
+```sh
+make native-ios-test
+```
+
+Set `IOS_SIMULATOR_UDID` before running the command to select a specific installed
+simulator.
+
+## Common Commands
+
+| Command | Purpose |
+| --- | --- |
+| `make test` | Run domain, storage, and project checks |
+| `make native-test` | Run Kotlin, Swift, and Room tests |
+| `make native-kotlin-test` | Run Kotlin domain tests |
+| `make native-swift-test` | Run Swift domain tests |
+| `make native-storage-test` | Run file-backed Room storage tests |
+| `make native-project-check` | Validate native project structure |
+| `make native-android-dependencies` | Verify Android dependency artifacts |
+| `make native-android-build` | Build APKs and run Android unit tests and lint |
+| `make native-android-ui-test` | Run Android instrumentation tests |
+| `make native-ios-test` | Build and test the iOS app in a simulator |
+| `make native-storage-durability` | Run macOS SwiftData durability checks |
+
+You can also run the domain suites directly:
 
 ```sh
 bash scripts/gradle.sh :domain:test
 bash scripts/swift.sh test --package-path mobile/ios/Packages/DailyGoDomain
 ```
 
-The conventional Gradle wrapper is also available:
+## Run on a Physical iPhone
+
+1. In Xcode, sign in under **Xcode > Settings > Accounts**.
+2. Connect and unlock the iPhone.
+3. Enable **Developer Mode** under **Settings > Privacy & Security** on the phone.
+4. Select your Apple development team in the DailyGo target's Signing settings.
+5. Choose the connected iPhone and press **Run**.
+
+For a command-line build, replace both placeholders:
 
 ```sh
-mobile/android/gradlew --no-daemon -p mobile/android :domain:test
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+export DEVELOPMENT_TEAM='<your Xcode team ID>'
+export IOS_DEVICE_UDID='<your connected iPhone UDID>'
+
+xcodebuild build \
+  -project mobile/ios/DailyGo.xcodeproj \
+  -scheme DailyGo \
+  -configuration Debug \
+  -destination "platform=iOS,id=$IOS_DEVICE_UDID" \
+  -derivedDataPath .tools/ios-device-derived-data \
+  DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+  -allowProvisioningUpdates \
+  -allowProvisioningDeviceRegistration
+
+xcrun devicectl device install app \
+  --device "$IOS_DEVICE_UDID" \
+  .tools/ios-device-derived-data/Build/Products/Debug-iphoneos/DailyGo.app
+
+xcrun devicectl device process launch \
+  --device "$IOS_DEVICE_UDID" \
+  com.dailygo
 ```
 
-Java 17 is required. The bootstrap obtains Gradle 8.13 from its official
-distribution and verifies SHA-256 before execution. Dependencies are pinned,
-locked, and covered by Gradle verification metadata. Java's wrapper download can
-time out on restricted GitHub routes; the curl-based bootstrap is the alternative.
+Keep personal signing details out of committed project files. If iOS reports an
+untrusted developer profile, approve it under **Settings > General > VPN & Device
+Management** on the phone. Personal Team profiles expire and may require a new
+build and installation.
 
-On macOS with Xcode's Swift installed, use `swift test --package-path
-mobile/ios/Packages/DailyGoDomain`. On compatible x86_64 Linux, the helper downloads
-Swift 6.0.3 from its official archive and verifies the upstream GPG signature
-before extraction. Its historical signing key is now expired; the verified
-archive signature was made while that release key was valid. Local Linux tooling
-is not a choice of production Xcode or store SDK.
+## Data and Security Notes
 
-If a newer Ubuntu installation lacks the Ubuntu 24 runtime ABIs:
+- HealthKit declarations do not grant access by themselves; production health
+  queries and permission flows are not complete.
+- Backups contain app records, pending changes, and retry receipts, but no raw
+  biometric or location samples.
+- Legacy imports require explicit timezone mapping and consent. Imported health
+  provenance is treated as unverified.
+- Corrupt or unsupported stores are reported instead of being destructively
+  recreated.
+- Build helpers use HTTPS and integrity verification; they do not pipe downloaded
+  installers into a shell.
 
-```sh
-bash scripts/swift-runtime.sh
-```
+## Continuous Integration
 
-This uses a private signed Ubuntu package index and extracts SHA-256-verified
-runtime libraries into ignored `.tools/`, without root or system installation.
-Downloading executable tooling carries supply-chain risk; helpers require HTTPS,
-official sources and integrity verification, and never pipe installers into a shell.
+GitHub Actions validates:
 
-## Implemented In This Batch
+- Kotlin domain and Room durability tests on Ubuntu
+- Swift domain tests on macOS
+- Android APK, unit, lint, launch, and storage instrumentation tests
+- iOS simulator app, unit, UI, and SwiftData durability tests
 
-- Explicit as-of dates; daily, weekday and ISO-week streaks.
-- Deduplication, shield earning/caps and closed-period consumption.
-- IANA timezone and DST-safe grace credits requiring overlapping workout context.
-- Validated titles/targets, actual goal attainment and archived-habit rejection.
-- Optional, source-attributed health evidence; manual data never becomes health-backed.
-- Kotlin and Swift tests consuming 34 shared acceptance vectors.
-- Android app module, launcher manifest, native Compose entry, resources and startup tests.
-- Xcode app/unit/UI targets, shared scheme, SwiftUI entry, local domain package,
-  read-only HealthKit declaration, purpose string and privacy manifest.
-- Native CI jobs for APK/unit/lint/emulator checks and Xcode simulator tests.
-- P4 Room storage foundation with owner-scoped keys, immutable date credits,
-    atomic mutations/outbox receipts and 26 file-backed SQLite durability tests.
+CI covers native startup, domain behavior, current persistence, legacy import,
+backup and deletion behavior, and storage recovery. It does not certify release
+signing, real health readings, physical-device performance, or store acceptance.
 
-## P4 Persistence Progress
+## Contributing
 
-P4 implements habit creation, completed check-ins and separate numeric
-partial-progress snapshots using
-Room 2.7.2 and Google's prebuilt bundled SQLite driver 2.5.2. It uses no FFI, JNA
-or application NDK build step. The completion API rejects below-target
-values; `recordProgress` instead persists finite nonnegative values below the
-target. Snapshots are not added together and never implicitly complete a goal.
+1. Create a focused branch.
+2. Keep Android and iOS behavior aligned where the feature is shared.
+3. Add or update shared fixtures for domain behavior changes.
+4. Run the smallest relevant test command, then run `make test`.
+5. Open a pull request with the behavior change and validation results.
 
-Run the focused suite without an Android SDK:
-
-```sh
-make native-storage-test
-```
-
-The same persistence sources in `mobile/android/storage/src/shared/kotlin` are
-compiled by the JVM test module and independently by the Android app. Only the
-database builders differ. This is Android persistence testing, not a Kotlin
-runtime shared with iOS; iOS remains native Swift/SwiftData.
-
-File-backed tests cover habit/check-in outbox failure rollback, reopen, durable
-retries after acknowledgement, concurrent same-day completions, owner isolation,
-invalid/archived rejection, separate progress, and immutable grace dates across
-timezone changes. Both Room v1/v2 schemas are tracked; a real v1-to-v2 upgrade
-preserves data, pending events and retry receipts. SQLite-full writes roll back
-and can retry after space is restored. Corruption/unsupported versions surface
-without destructive recreation; backup restoration is tested.
-
-Room v3 adds durable owner-deletion fences
-with preserving v1/v2 upgrade paths. Twenty-eight JVM SQLite tests pass, including
-legacy import, versioned backups, atomic conflicts/deletion and disk-full import
-rollback/recovery. Android transfer/deletion instrumentation passed in hosted CI.
-Local WSL has no licensed Android SDK.
-Startup UI remains unwired to persisted workflows, which belong to
-the later product integration. Local outbox kinds are not a finalized server API.
-
-SwiftData sources in `mobile/ios/Application/Storage` now include a v1-to-v2
-upgrade, unique indexed scope models/inverse relationships for owner/habit reads,
-direct result-key retry lookups, backups, legacy import and deletion fencing.
-Thirteen file-backed XCTest methods are wired into Xcode for upgrade, retries,
-owner isolation, invalid imports, save rollback and unsupported/corrupt stores.
-Production callers must share one writer actor; cross-repository/process
-concurrency is not accepted by these tests.
-
-Both adapters open legacy SQLite read-only and require explicit IANA timezone
-mapping and consent to treat legacy health provenance as unverified. Imported
-credits are labelled as legacy, not fabricated calendar/health evidence. Entity
-IDs, UTC instants, credited dates and pending event IDs are retained; authoritative
-outbox acknowledgements remain acknowledged even with stale legacy sync labels.
-Unresolved/invalid sources are reported without target mutation or source changes.
-
-Backups are platform-scoped version-1 JSON, bounded to 32 MiB, and preserve retry
-receipts and pending changes without raw biometric/location samples. Historical
-creation snapshots and credited timezones survive current habit timezone changes. Imports reject
-ownership/version/identity/reference/value conflicts atomically; reimport never
-resurrects an acknowledged event. Deletion clears owner data/events/receipts and
-retains only a minimal anti-resurrection fence. A new local profile needs a new
-owner ID; global account deletion and cross-platform sync remain P6.
-
-Swift record/backup/SQLite3 reader compilation and contract behaviors pass.
-CI also requires `make native-storage-durability` on macOS: a
-temporary bounded disk image tests real disk-full rollback/retry, backup restore
-and read-only legacy conversion, then is detached and removed. Its execution is
-accepted at `7d6cf0a`. Legacy user files/databases remain untouched.
-
-P5 now has persisted native CRUD/progress screens, streak/history views, opt-in
-reminder settings and completion undo/restore in source on both platforms.
-Corrections retain immutable entry credits and commit state/events/receipts
-atomically; stale retries do not replay an undo after restoration. Room v5 adds
-correction state with preserving migrations; 38 JVM storage tests pass. Both backup
-formats use version 3 for correction state while accepting older supported formats.
-Swift command/backup contracts compile and execute locally, but updated SwiftData,
-Android/iOS UI and reminder behavior still require fresh native CI/device checks.
-Onboarding, numeric value correction, complete settings/accessibility flows,
-large-history performance, real health integrations and release acceptance remain
-open. The accepted P4 revision does not accept these later uncommitted changes.
-
-## Native App Builds
-
-SDK-free checks remain independent of mobile SDK installation:
-
-```sh
-make native-test native-project-check native-android-dependencies
-```
-
-Android requires Java 17 and a licensed Linux Android SDK when running in WSL:
-API 36 platform, Build Tools 35.0.0, platform tools, and an emulator/device for
-instrumentation. Configure `ANDROID_HOME` or the ignored Android `local.properties`.
-Do not point WSL builds at Windows SDK executables. License acceptance is an owner
-action; the scripts do not accept licenses for you.
-
-```sh
-make native-android-build
-make native-android-ui-test
-```
-
-Debug APK output: `mobile/android/app/build/outputs/apk/debug/app-debug.apk`.
-The app is opt-in (`-PandroidApp=true`) so domain tests stay SDK-free.
-App/runtime locks and verification hashes are recorded; any additional build-tool
-artifacts found by the first SDK build must be reviewed and added to verification
-metadata, not bypassed with lenient/off verification.
-
-On macOS, open `mobile/ios/DailyGo.xcodeproj` and use the shared `DailyGo` scheme.
-CI selects Xcode 16.4. Run unsigned simulator app/unit/UI tests with:
-
-```sh
-make native-ios-test
-```
-
-The script selects an available iPhone simulator matching Xcode's simulator SDK.
-`IOS_SIMULATOR_UDID` can select
-a specific installed device. Real-device builds require your Apple team and
-provisioning; `com.dailygo` remains a provisional bundle/application identifier.
-
-P3 currently supplies startup entries, not persisted habit workflows. The empty
-state contains no fabricated habits or health readings. Health queries and their
-permission workflows remain P5; declarations alone do not grant health access.
-
-## Release Gates Still Open
-
-Complete UI, actual health
-queries, reminders, accounts/sync, device profiling, accessibility/localization,
-beta, signing and store disclosures remain tracked tasks. Latest accepted native CI:
-`7d6cf0add20f06bcc0c81ebd4e654f5b311c7526`:
-https://github.com/zhangchl007/dailygo/actions/runs/37446112166
-Domain/Room tests, Android APK/unit/lint/emulator and Xcode simulator app/unit/UI
-all passed. This includes Room v3, SwiftData v2, legacy import, versioned backup,
-owner deletion and real SwiftData disk-full recovery. Retained artifacts include
-APKs/reports, Android startup PNG, Swift domain results and iOS xcresult/logs.
-Signing and real health/performance validation need owner credentials and physical
-devices.
-No cloud resources or store releases have been created.
-
-# dailygo
+Please do not commit SDK paths, signing teams, certificates, profiles, secrets,
+generated build output, or files under `.tools/`.

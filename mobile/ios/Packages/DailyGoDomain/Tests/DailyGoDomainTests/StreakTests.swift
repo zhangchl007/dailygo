@@ -27,6 +27,45 @@ final class StreakTests: XCTestCase {
         let error: Bool?
     }
 
+    func testWeeklyTargetsAcceptBoundariesAndRejectValuesOutsideRange() throws {
+        let asOf = try LocalDay("2026-10-05")
+        let minimumTarget = 1
+        let maximumTarget = 7
+
+        for target in [minimumTarget, maximumTarget] {
+            let result = try StreakCalculator.calculate(
+                schedule: .weekly(target: target), dates: [], asOf: asOf
+            )
+            XCTAssertEqual(result.unit, .weeks)
+        }
+
+        for target in [minimumTarget - 1, maximumTarget + 1] {
+            XCTAssertThrowsError(
+                try StreakCalculator.calculate(schedule: .weekly(target: target), dates: [], asOf: asOf)
+            ) { error in
+                XCTAssertEqual(error as? DomainError, .invalidSchedule)
+            }
+        }
+    }
+
+    func testWeeklyShieldsCountCompletedWeeksRatherThanDays() throws {
+        let firstWeek = try LocalDay("2026-08-31")
+        let completedWeeksForShield = 7
+        let daysPerWeek = 7
+        let dates = try (0..<(completedWeeksForShield * daysPerWeek)).map {
+            try firstWeek.adding(days: $0)
+        }
+        let asOf = try LocalDay("2026-10-18")
+
+        let summary = try StreakCalculator.calculate(
+            schedule: .weekly(target: daysPerWeek), dates: dates, asOf: asOf
+        )
+
+        XCTAssertEqual(summary.current, completedWeeksForShield)
+        XCTAssertEqual(summary.shields, 1)
+        XCTAssertEqual(summary.unit, .weeks)
+    }
+
     func testSharedFixtures() throws {
         var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         for _ in 0..<6 { root.deleteLastPathComponent() }

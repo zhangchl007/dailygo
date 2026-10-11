@@ -30,11 +30,15 @@ actor NativeRepository {
         try requireActive(ownerID: ownerID)
         let entries = try rows(ownerID: ownerID, category: "completion").map { try decode(NativeEntry.self, $0) } +
             rows(ownerID: ownerID, category: "progress").map { try decode(NativeEntry.self, $0) }
+        let completionValueCorrections = try rows(ownerID: ownerID, category: "completionValueCorrection")
+            .map { try decode(NativeCompletionValueCorrection.self, $0) }
+            .sorted { ($0.recordID, $0.revision) < ($1.recordID, $1.revision) }
         let backup = NativeBackup(ownerID: ownerID, habits: try habits(ownerID: ownerID),
             entries: entries.sorted { ($0.kind.rawValue, $0.id) < ($1.kind.rawValue, $1.id) }, events: try events(ownerID: ownerID),
             receipts: try rows(ownerID: ownerID, category: "receipt").map { try decode(NativeReceipt.self, $0) }.sorted { $0.operationID < $1.operationID },
             deletedHabits: try rows(ownerID: ownerID, category: "deletedHabit").map { try decode(NativeHabitDeletion.self, $0) }.sorted { $0.habitID < $1.habitID },
-            completionStates: try rows(ownerID: ownerID, category: "completionState").map { try decode(NativeCompletionState.self, $0) }.sorted { $0.recordID < $1.recordID })
+            completionStates: try rows(ownerID: ownerID, category: "completionState").map { try decode(NativeCompletionState.self, $0) }.sorted { $0.recordID < $1.recordID },
+            completionValueCorrections: completionValueCorrections)
         try backup.validate(ownerID: ownerID)
         let contents = try NativeStorageEncoding.encode(backup)
         guard contents.count <= 32 * 1024 * 1024 else { throw NativeStorageError.invalidDefinition }
@@ -61,6 +65,10 @@ actor NativeRepository {
                     guard try decode(NativeEntry.self, existing) == entry else { throw NativeStorageError.operationConflict }
                 }
                 try merge(ownerID: ownerID, category: entry.kind.rawValue, identifier: entry.id, keyID: keyID, value: entry)
+            }
+            for correction in backup.completionValueCorrections ?? [] {
+                try merge(ownerID: ownerID, category: "completionValueCorrection", identifier: correction.operationID,
+                    keyID: correction.operationID, value: correction)
             }
             for event in backup.events {
                 if try row(ownerID: ownerID, category: "event", keyID: event.eventID) != nil || receipt(ownerID: ownerID, operationID: event.eventID) == nil {
@@ -270,6 +278,7 @@ actor NativeRepository {
                       let state = try row(ownerID: command.ownerID, category: "completionState", keyID: previous.resultID) else { throw NativeStorageError.operationConflict }
                 return try decode(NativeCompletionState.self, state)
             }
+
             guard let record = try entryRow(ownerID: command.ownerID, category: "completion", identifier: command.recordID) else { throw NativeStorageError.missingResult }
             let entry = try decode(NativeEntry.self, record)
             guard let habitRow = try row(ownerID: command.ownerID, category: "habit", keyID: entry.habitID) else { throw NativeStorageError.missingHabit }
@@ -289,6 +298,54 @@ actor NativeRepository {
                 request: request, resultID: command.recordID, resultKey: command.recordID))
             return state
         }
+    }
+
+    func correctCompletionValue(_ command: NativeCompletionValueCorrectionCommand) throws -> NativeCompletionValueCorrection {
+        try command.validate()
+        let request = try command.request()
+        return try mutate {
+            try requireActive(ownerID: command.ownerID)
+            if let previous = try receipt(ownerID: command.ownerID, operationID: command.operationID) {
+                guard previous.kind == "checkin.value_corrected", previous.request == request,
+                      let key = previous.resultKey,
+                      let row = try row(ownerID: command.ownerID, category: "completionValueCorrection", keyID: key) else {
+                    throw NativeStorageError.operationConflict
+                }
+                return try decode(NativeCompletionValueCorrection.self, row)
+            }
+            guard let record = try entryRow(ownerID: command.ownerID, category: "completion", identifier: command.recordID) else {
+                throw NativeStorageError.missingResult
+            }
+            let entry = try decode(NativeEntry.self, record)
+            guard let originalValue = entry.value, command.occurredAtMillis >= entry.occurredAtMillis,
+                  let habitRow = try row(ownerID: command.ownerID, category: "habit", keyID: entry.habitID) else {
+                throw NativeStorageError.invalidDefinition
+            }
+            let habit = try decode(NativeHabit.self, habitRow)
+            guard try habit.definition().goal.isCompleted(value: command.value) else { throw DomainError.invalidGoal }
+            let corrections = try rows(ownerID: command.ownerID, category: "completionValueCorrection")
+                .map { try decode(NativeCompletionValueCorrection.self, $0) }
+                .filter { $0.recordID == command.recordID }
+            let correction = NativeCompletionValueCorrection(ownerID: command.ownerID, operationID: command.operationID,
+                recordID: command.recordID, revision: (corrections.map(\.revision).max() ?? 0) + 1,
+                value: command.value, occurredAtMillis: command.occurredAtMillis)
+            guard originalValue.isFinite else { throw NativeStorageError.invalidDefinition }
+            try append(ownerID: command.ownerID, category: "completionValueCorrection", identifier: command.operationID,
+                keyID: command.operationID, value: correction)
+            try appendEvent(NativeEvent(ownerID: command.ownerID, eventID: command.operationID, kind: "checkin.value_corrected",
+                entityID: command.recordID, payload: request, createdAtMillis: command.occurredAtMillis))
+            try appendReceipt(NativeReceipt(ownerID: command.ownerID, operationID: command.operationID, kind: "checkin.value_corrected",
+                request: request, resultID: command.recordID, resultKey: command.operationID))
+            return correction
+        }
+    }
+
+    func latestCompletionValueCorrection(ownerID: String, recordID: String) throws -> NativeCompletionValueCorrection? {
+        try NativeStorageEncoding.validateIdentity(ownerID, recordID)
+        let corrections = try rows(ownerID: ownerID, category: "completionValueCorrection")
+            .map { try decode(NativeCompletionValueCorrection.self, $0) }
+            .filter { $0.recordID == recordID }
+        return corrections.max { $0.revision < $1.revision }
     }
 
     private func completionIsActive(ownerID: String, recordID: String) throws -> Bool {
@@ -412,7 +469,8 @@ actor NativeRepository {
                 }
                 result = NativeEntry(ownerID: command.ownerID, id: command.recordID, habitID: command.habitID, kind: kind,
                     occurredAtMillis: command.occurredAtMillis, creditedDate: original?.creditedDate ?? credit.date.description,
-                    zoneID: original?.zoneID ?? credit.zoneID, creditReason: original?.creditReason ?? credit.reason, value: command.value)
+                    zoneID: original?.zoneID ?? credit.zoneID, creditReason: original?.creditReason ?? credit.reason, value: command.value,
+                    provenance: original?.provenance ?? command.provenance)
                 try append(ownerID: command.ownerID, category: kind.rawValue, identifier: result.id, keyID: keyID, value: result)
                 try appendEvent(NativeEvent(ownerID: command.ownerID, eventID: command.operationID, kind: eventKind, entityID: result.id,
                     payload: try NativeStorageEncoding.encode(result), createdAtMillis: command.occurredAtMillis))

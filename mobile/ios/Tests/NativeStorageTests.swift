@@ -120,6 +120,44 @@ final class NativeStorageTests: XCTestCase {
         XCTAssertFalse(events.contains { $0.eventID == "correction" })
     }
 
+    func testManualCompletionValueCorrectionPreservesOriginalEntryAndBackup() async throws {
+        let url = try storeURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let completion = command(operationID: "complete", recordID: "done", value: 1000)
+        let correction = NativeCompletionValueCorrectionCommand(ownerID: "guest", operationID: "correct",
+            recordID: "done", value: 1200, occurredAtMillis: instant + 1)
+        let original: NativeEntry
+        do {
+            let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+            _ = try await repository.saveHabit(habit(), operationID: "create")
+            original = try await repository.complete(completion)
+            XCTAssertEqual(original.provenance, .manual)
+            let result = try await repository.correctCompletionValue(correction)
+            XCTAssertEqual(result.value, 1200)
+            let retriedCompletion = try await repository.complete(completion)
+            let latest = try await repository.latestCompletionValueCorrection(ownerID: "guest", recordID: "done")
+            XCTAssertEqual(retriedCompletion, original)
+            XCTAssertEqual(latest, result)
+            try await repository.acknowledge(ownerID: "guest", eventID: "correct")
+            let retriedCorrection = try await repository.correctCompletionValue(correction)
+            XCTAssertEqual(retriedCorrection, result)
+        }
+        let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+        let retained = try await repository.completionRecordOn(ownerID: "guest", habitID: "walk", date: original.creditedDate)
+        XCTAssertEqual(retained, original)
+        let latest = try await repository.latestCompletionValueCorrection(ownerID: "guest", recordID: "done")
+        XCTAssertEqual(latest?.value, 1200)
+        let backup = try await repository.exportOwner(ownerID: "guest")
+        let targetURL = try storeURL()
+        defer { try? FileManager.default.removeItem(at: targetURL.deletingLastPathComponent()) }
+        let target = NativeRepository(modelContainer: try NativeStore.open(url: targetURL))
+        try await target.importOwner(ownerID: "guest", contents: backup)
+        let restored = try await target.completionRecordOn(ownerID: "guest", habitID: "walk", date: original.creditedDate)
+        let restoredCorrection = try await target.latestCompletionValueCorrection(ownerID: "guest", recordID: "done")
+        XCTAssertEqual(restored, original)
+        XCTAssertEqual(restoredCorrection?.value, 1200)
+    }
+
     func testRecentCompletionsAreCalendarBoundedOwnerScopedAndDurable() async throws {
         let url = try storeURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
@@ -156,6 +194,29 @@ final class NativeStorageTests: XCTestCase {
                 _ = try await repository.recentCompletions(ownerID: "guest", habitID: "walk", through: end.description, days: limit)
             }
         }
+    }
+
+    func testOverviewBoundsHistoryAndKeepsExactThousandDayStreak() async throws {
+        let url = try storeURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let lastInstant = instant + 999 * 86_400_000
+        do {
+            let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+            _ = try await repository.saveHabit(habit(), operationID: "create")
+            for offset in 0..<1000 {
+                let operationID = "history-\(offset)"
+                let entry = NativeEntryCommand(ownerID: "guest", operationID: operationID, recordID: operationID,
+                    habitID: "walk", occurredAtMillis: instant + Int64(offset) * 86_400_000,
+                    value: 1000, workoutStartedAtMillis: nil, asOfMillis: lastInstant)
+                _ = try await repository.complete(entry)
+            }
+        }
+        let repository = NativeRepository(modelContainer: try NativeStore.open(url: url))
+        let model = NativeHabitModel(now: { NativeStorageEncoding.date(lastInstant) }, repository: repository)
+        await model.reload()
+        XCTAssertEqual(model.streaks["walk"]?.current, 1000)
+        XCTAssertEqual(model.recentDates["walk"]?.count, 35)
+        XCTAssertTrue(model.recentDates["walk"]?.contains(model.asOfDays["walk"]?.description ?? "") == true)
     }
 
     func testCompletionCorrectionPreservesCreditAcrossRetryReopenAndBackup() async throws {

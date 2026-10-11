@@ -212,6 +212,31 @@ struct NativeEntryCommand: Codable, Sendable {
     let workoutStartedAtMillis: Int64?
     var asOfMillis: Int64?
     var correctsRecordID: String? = nil
+    var provenance: NativeEntryProvenance? = .manual
+
+    init(
+        ownerID: String,
+        operationID: String,
+        recordID: String,
+        habitID: String,
+        occurredAtMillis: Int64,
+        value: Double?,
+        workoutStartedAtMillis: Int64?,
+        asOfMillis: Int64?,
+        correctsRecordID: String? = nil,
+        provenance: NativeEntryProvenance? = .manual
+    ) {
+        self.ownerID = ownerID
+        self.operationID = operationID
+        self.recordID = recordID
+        self.habitID = habitID
+        self.occurredAtMillis = occurredAtMillis
+        self.value = value
+        self.workoutStartedAtMillis = workoutStartedAtMillis
+        self.asOfMillis = asOfMillis
+        self.correctsRecordID = correctsRecordID
+        self.provenance = provenance
+    }
 
     func request() throws -> Data {
         var normalized = self
@@ -224,6 +249,67 @@ struct NativeEntryCommand: Codable, Sendable {
         guard occurredAtMillis <= (asOfMillis ?? occurredAtMillis) else { throw DomainError.futureDate }
         guard workoutStartedAtMillis.map({ $0 <= occurredAtMillis }) ?? true else { throw DomainError.invalidDate }
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case ownerID, operationID, recordID, habitID, occurredAtMillis, value, workoutStartedAtMillis
+        case asOfMillis, correctsRecordID, provenance
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        ownerID = try values.decode(String.self, forKey: .ownerID)
+        operationID = try values.decode(String.self, forKey: .operationID)
+        recordID = try values.decode(String.self, forKey: .recordID)
+        habitID = try values.decode(String.self, forKey: .habitID)
+        occurredAtMillis = try values.decode(Int64.self, forKey: .occurredAtMillis)
+        value = try values.decodeIfPresent(Double.self, forKey: .value)
+        workoutStartedAtMillis = try values.decodeIfPresent(Int64.self, forKey: .workoutStartedAtMillis)
+        asOfMillis = try values.decodeIfPresent(Int64.self, forKey: .asOfMillis)
+        correctsRecordID = try values.decodeIfPresent(String.self, forKey: .correctsRecordID)
+        provenance = try values.decodeIfPresent(NativeEntryProvenance.self, forKey: .provenance)
+    }
+}
+
+enum NativeEntryProvenance: String, Codable, Equatable, Sendable {
+    case manual, healthKit, healthConnect, legacyImported
+
+    var localizationKey: String {
+        switch self {
+        case .manual: "Manual"
+        case .healthKit: "HealthKit"
+        case .healthConnect: "Health Connect"
+        case .legacyImported: "Imported (unverified)"
+        }
+    }
+}
+
+struct NativeCompletionValueCorrectionCommand: Codable, Equatable, Sendable {
+    let ownerID: String
+    let operationID: String
+    let recordID: String
+    let value: Double
+    let occurredAtMillis: Int64
+    var asOfMillis: Int64? = nil
+
+    func request() throws -> Data {
+        var normalized = self
+        normalized.asOfMillis = nil
+        return try NativeStorageEncoding.encode(normalized)
+    }
+
+    func validate() throws {
+        try NativeStorageEncoding.validateIdentity(ownerID, operationID, recordID)
+        guard occurredAtMillis <= (asOfMillis ?? occurredAtMillis) else { throw DomainError.futureDate }
+    }
+}
+
+struct NativeCompletionValueCorrection: Codable, Equatable, Sendable {
+    let ownerID: String
+    let operationID: String
+    let recordID: String
+    let revision: Int
+    let value: Double
+    let occurredAtMillis: Int64
 }
 
 struct NativeEntry: Codable, Equatable, Sendable {
@@ -236,6 +322,49 @@ struct NativeEntry: Codable, Equatable, Sendable {
     let zoneID: String
     let creditReason: CreditReason
     let value: Double?
+    let provenance: NativeEntryProvenance?
+
+    init(
+        ownerID: String,
+        id: String,
+        habitID: String,
+        kind: NativeEntryKind,
+        occurredAtMillis: Int64,
+        creditedDate: String,
+        zoneID: String,
+        creditReason: CreditReason,
+        value: Double?,
+        provenance: NativeEntryProvenance? = .manual
+    ) {
+        self.ownerID = ownerID
+        self.id = id
+        self.habitID = habitID
+        self.kind = kind
+        self.occurredAtMillis = occurredAtMillis
+        self.creditedDate = creditedDate
+        self.zoneID = zoneID
+        self.creditReason = creditReason
+        self.value = value
+        self.provenance = provenance
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ownerID, id, habitID, kind, occurredAtMillis, creditedDate, zoneID, creditReason, value, provenance
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        ownerID = try values.decode(String.self, forKey: .ownerID)
+        id = try values.decode(String.self, forKey: .id)
+        habitID = try values.decode(String.self, forKey: .habitID)
+        kind = try values.decode(NativeEntryKind.self, forKey: .kind)
+        occurredAtMillis = try values.decode(Int64.self, forKey: .occurredAtMillis)
+        creditedDate = try values.decode(String.self, forKey: .creditedDate)
+        zoneID = try values.decode(String.self, forKey: .zoneID)
+        creditReason = try values.decode(CreditReason.self, forKey: .creditReason)
+        value = try values.decodeIfPresent(Double.self, forKey: .value)
+        provenance = try values.decodeIfPresent(NativeEntryProvenance.self, forKey: .provenance)
+    }
 }
 
 struct NativeEvent: Codable, Equatable, Sendable {

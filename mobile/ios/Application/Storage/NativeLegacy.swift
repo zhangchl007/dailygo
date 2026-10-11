@@ -133,7 +133,8 @@ enum NativeLegacy {
             let complete = try habit.definition().goal.isCompleted(value: old.value)
             guard complete || old.value != nil else { throw NativeStorageError.invalidDefinition }
             entries.append(NativeEntry(ownerID: ownerID, id: old.id, habitID: old.habit_id, kind: complete ? .completion : .progress,
-                occurredAtMillis: old.timestamp_utc, creditedDate: old.local_date, zoneID: habit.zoneID, creditReason: .legacyImported, value: old.value))
+                occurredAtMillis: old.timestamp_utc, creditedDate: old.local_date, zoneID: habit.zoneID, creditReason: .legacyImported,
+                value: old.value, provenance: .legacyImported))
             if old.sync_status == "Pending", !oldEvents.contains(where: { $0.kind == "CheckInCreated" && $0.entityID == old.id }) {
                 throw NativeStorageError.invalidDefinition
             }
@@ -157,7 +158,8 @@ enum NativeLegacy {
                 kind = entry.kind == .completion ? "checkin.completed" : "progress.recorded"
                 payload = try NativeStorageEncoding.encode(entry)
                 request = try NativeEntryCommand(ownerID: ownerID, operationID: old.id, recordID: entry.id, habitID: entry.habitID,
-                    occurredAtMillis: entry.occurredAtMillis, value: entry.value, workoutStartedAtMillis: nil, asOfMillis: nil).request()
+                    occurredAtMillis: entry.occurredAtMillis, value: entry.value, workoutStartedAtMillis: nil, asOfMillis: nil,
+                    provenance: .legacyImported).request()
             default: throw NativeStorageError.invalidDefinition
             }
             receipts.append(NativeReceipt(ownerID: ownerID, operationID: old.id, kind: kind, request: request, resultID: old.entityID))

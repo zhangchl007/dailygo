@@ -3,7 +3,7 @@ import DailyGoDomain
 
 struct NativeBackup: Codable, Sendable {
     var format = "dailygo.ios.backup"
-    var version = 4
+    var version = 5
     let ownerID: String
     let habits: [NativeHabit]
     let entries: [NativeEntry]
@@ -11,12 +11,14 @@ struct NativeBackup: Codable, Sendable {
     let receipts: [NativeReceipt]
     var deletedHabits: [NativeHabitDeletion]? = nil
     var completionStates: [NativeCompletionState]? = nil
+    var completionValueCorrections: [NativeCompletionValueCorrection]? = nil
 
     func validate(ownerID expectedOwner: String) throws {
         try NativeStorageEncoding.validateIdentity(expectedOwner)
-          guard format == "dailygo.ios.backup", (1...4).contains(version), ownerID == expectedOwner,
+          guard format == "dailygo.ios.backup", (1...5).contains(version), ownerID == expectedOwner,
               version != 1 || deletedHabits == nil,
-              version >= 3 || completionStates == nil else { throw NativeStorageError.invalidDefinition }
+              version >= 3 || completionStates == nil,
+              version >= 5 || completionValueCorrections == nil else { throw NativeStorageError.invalidDefinition }
         func identities(_ records: [(String, String)]) throws {
             guard records.allSatisfy({ $0.0 == ownerID }), Set(records.map(\.1)).count == records.count else {
                 throw NativeStorageError.invalidDefinition
@@ -29,6 +31,7 @@ struct NativeBackup: Codable, Sendable {
         try identities(receipts.map { ($0.ownerID, $0.operationID) })
         try identities((deletedHabits ?? []).map { ($0.ownerID, $0.habitID) })
         try identities((completionStates ?? []).map { ($0.ownerID, $0.recordID) })
+        try identities((completionValueCorrections ?? []).map { ($0.ownerID, $0.operationID) })
         let definitions = Dictionary(uniqueKeysWithValues: habits.map { ($0.id, $0) })
         let deletions = Dictionary(uniqueKeysWithValues: (deletedHabits ?? []).map { ($0.habitID, $0) })
         guard Set(definitions.keys).isDisjoint(with: deletions.keys) else { throw NativeStorageError.invalidDefinition }
@@ -48,7 +51,31 @@ struct NativeBackup: Codable, Sendable {
                 guard case .numeric = goal, let value = entry.value, try !goal.isCompleted(value: value) else { throw NativeStorageError.invalidDefinition }
             }
         }
+        var correctionRevisions = Set<String>()
+        for correction in completionValueCorrections ?? [] {
+            guard let entry = entries.first(where: { $0.kind == .completion && $0.id == correction.recordID }),
+                  let habit = definitions[entry.habitID], entry.value != nil,
+                  correction.revision > 0,
+                  correctionRevisions.insert(try NativeStorageEncoding.key(correction.recordID, String(correction.revision))).inserted,
+                  try habit.definition().goal.isCompleted(value: correction.value) else {
+                throw NativeStorageError.invalidDefinition
+            }
+        }
         let operations = Dictionary(uniqueKeysWithValues: receipts.map { ($0.operationID, $0) })
+        for correction in completionValueCorrections ?? [] {
+            guard let receipt = operations[correction.operationID], receipt.kind == "checkin.value_corrected",
+                  receipt.resultID == correction.recordID,
+                  let entry = entries.first(where: { $0.kind == .completion && $0.id == correction.recordID }),
+                  correction.occurredAtMillis >= entry.occurredAtMillis else {
+                throw NativeStorageError.invalidDefinition
+            }
+            let request = try NativeStorageEncoding.decode(NativeCompletionValueCorrectionCommand.self, from: receipt.request)
+            guard request.ownerID == correction.ownerID, request.operationID == correction.operationID,
+                  request.recordID == correction.recordID, request.value == correction.value,
+                  request.occurredAtMillis == correction.occurredAtMillis, request.asOfMillis == nil else {
+                throw NativeStorageError.invalidDefinition
+            }
+        }
         for state in completionStates ?? [] {
             guard let receipt = operations[state.operationID], receipt.kind == "checkin.corrected", receipt.resultID == state.recordID else { throw NativeStorageError.invalidDefinition }
             let request = try NativeStorageEncoding.decode(NativeCompletionCorrectionCommand.self, from: receipt.request)
@@ -61,7 +88,16 @@ struct NativeBackup: Codable, Sendable {
                   receipt.resultID == deletion.habitID else { throw NativeStorageError.invalidDefinition }
         }
         for receipt in receipts {
-            if receipt.kind == "checkin.corrected" {
+            if receipt.kind == "checkin.value_corrected" {
+                let request = try NativeStorageEncoding.decode(NativeCompletionValueCorrectionCommand.self, from: receipt.request)
+                try request.validate()
+                guard request.ownerID == ownerID, request.operationID == receipt.operationID, request.recordID == receipt.resultID,
+                      request.asOfMillis == nil, receipt.resultKey == request.operationID,
+                      (completionValueCorrections ?? []).contains(where: {
+                          $0.operationID == request.operationID && $0.recordID == request.recordID &&
+                          $0.value == request.value && $0.occurredAtMillis == request.occurredAtMillis
+                      }) else { throw NativeStorageError.invalidDefinition }
+            } else if receipt.kind == "checkin.corrected" {
                 let request = try NativeStorageEncoding.decode(NativeCompletionCorrectionCommand.self, from: receipt.request)
                 try request.validate()
                 guard request.ownerID == ownerID, request.operationID == receipt.operationID, request.recordID == receipt.resultID,
@@ -115,6 +151,7 @@ struct NativeBackup: Codable, Sendable {
                       let result = entries.first(where: { $0.kind == kind && $0.id == receipt.resultID }), result.habitID == request.habitID else {
                     throw NativeStorageError.invalidDefinition
                 }
+                guard result.provenance == request.provenance else { throw NativeStorageError.invalidDefinition }
                 if kind == .progress {
                     guard result.id == request.recordID, result.value == request.value, result.occurredAtMillis == request.occurredAtMillis else { throw NativeStorageError.invalidDefinition }
                     if let identifier = request.correctsRecordID {
@@ -136,7 +173,11 @@ struct NativeBackup: Codable, Sendable {
         for event in events {
             guard let receipt = operations[event.eventID], receipt.kind == event.kind, receipt.resultID == event.entityID else { throw NativeStorageError.invalidDefinition }
             guard event.kind != "habit.retired" else { throw NativeStorageError.invalidDefinition }
-            if event.kind == "checkin.corrected" {
+            if event.kind == "checkin.value_corrected" {
+                let payload = try NativeStorageEncoding.decode(NativeCompletionValueCorrectionCommand.self, from: event.payload)
+                let request = try NativeStorageEncoding.decode(NativeCompletionValueCorrectionCommand.self, from: receipt.request)
+                guard payload == request, event.createdAtMillis == request.occurredAtMillis else { throw NativeStorageError.invalidDefinition }
+            } else if event.kind == "checkin.corrected" {
                 let payload = try NativeStorageEncoding.decode(NativeCompletionCorrectionCommand.self, from: event.payload)
                 let request = try NativeStorageEncoding.decode(NativeCompletionCorrectionCommand.self, from: receipt.request)
                 guard payload == request, event.createdAtMillis == request.occurredAtMillis else { throw NativeStorageError.invalidDefinition }
